@@ -1,0 +1,26 @@
+
+#!/bin/bash
+#PBS -m ae
+#PBS -P n81
+#PBS -q normalbw
+#PBS -l walltime=2:00:00
+#PBS -l mem=128GB
+#PBS -l ncpus=28
+#PBS -l jobfs=100GB
+#PBS -j oe
+#PBS -l wd
+#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/hh5+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
+echo "Starting time:"
+date
+
+echo "Module load"
+module use /g/data3/hh5/public/modules
+module load conda/analysis3-24.04
+
+echo "Starting bias correction"
+
+python sdmbc_hist_main.py
+
+
+echo "Ending time:"
+date

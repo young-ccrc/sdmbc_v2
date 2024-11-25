@@ -1,0 +1,100 @@
+# Bias Correction Configuration Guide
+# This document provides a guide to configure the bias correction script. The configuration is done via a YAML file, which is a human-readable data serialization language. It is commonly used for configuration files and in applications where data is being stored or transmitted.
+
+# Configuration Parameters
+# Here are the parameters you can set in the configuration file:
+
+# bc_hist_path: The file path to the historical bias correction data.
+# bc_future_path: The file path to the future bias correction data.
+# obs_path: The file path to the ERA5 reanalysis data.
+# out_path: The output directory where the bias corrected data will be saved.
+# out_figure_path: The output directory where the figures will be saved.
+# bc_boundary: The boundary for bias correction.
+# input_variable: The list of input variables for bias correction.
+# target_variable: The list of target variables for bias correction.
+# infor, gname, period, cinfor, sinfor, version: Information about the historical data.
+# scenario, cinfor_f, version_f: Information about the future data.
+# bc_hist, startyear_h, endyear_h, starty_sfc_h, endy_sfc_h: Historical simulation period information.
+# bc_future, startyear_f, endyear_f, starty_sfc_f, endy_sfc_f: Future simulation period information.
+# no_of_variables, time_scale, no_of_iterations, missing_value, moving_window, correction_model, sub_daily_correction: Bias correction information.
+# lat_min, lat_max, lon_min, lon_max: The latitudes and longitudes of the selected area.
+# upper_limit, lower_limit: The physical upper and lower limits for the variables.
+# save_bc_output, draw_figure, reformat_to_original: Options for bias correction.
+
+# Usage
+# To use this configuration, simply fill in the parameters with your desired values and save the file. Then, pass the file path to the script as an argument. For example:
+# python sdmbc_hist_main.py --config /path/to/your/config.yaml
+# Please ensure that all file paths and variable names are correct. If you encounter any issues, please refer to the error messages for guidance.
+
+# Please note that this is a general guide. For more specific instructions, you should refer to the documentation provided by the developers or contact them directly.
+
+# =============== Input for bias correction =========================
+# File path -------------------------------------------------
+# bc_hist_path: "/g/data/oi10/replicas/CMIP6/CMIP/EC-Earth-Consortium/EC-Earth3-Veg/historical/r1i1p1f1/6hrLev"
+bc_hist_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r1i1p1f1/6hrLev"
+bc_future_path: "/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp370/r6i1p1f1/6hrLev"
+obs_path: "/g/data/w28/yk8692/input/era5/"
+
+out_path: "/g/data/w28/yk8692/sdmbc_v2/tests"
+out_figure_path: "/g/data/w28/yk8692/sdmbc_v2/tests"
+
+# Input variable names --------------------------------------------
+input_variable: ["q", "t", "u", "v"] # ["tos"] for 2D
+target_variable: ["hus", "ta", "ua", "va"] # ["sst"] for 2D
+
+# historical
+infor: "6hrLev"
+gname: "ACCESS-ESM1-5"
+period: "historical"
+cinfor: "r1i1p1f1"
+sinfor: "gn"
+version: "20191115"
+
+# future
+scenario: "ssp126"
+cinfor_f: "r6i1p1f1"
+version_f: "20211213"
+
+# Simulation periods, historical -----------------------------------
+bc_hist: True # Yes: True, No: False
+startyear_h: 1959
+endyear_h: 1989
+starty_sfc_h: 1980
+endy_sfc_h: 2012
+
+# Simulation periods, future -----------------------------------
+bc_future: False # Yes: True, No: False
+startyear_f: 1990
+endyear_f: 2020
+starty_sfc_f: 1980
+endy_sfc_f: 2100
+
+# Bias correction information -------------------------------------
+bc_boundary: "lateral"
+input_model: "reanalysis"
+tlevel: 38 # number of vertical levels
+no_of_variables: 3 # number of variables to be bias corrected, generally 3
+time_scale: 0 # 0: daily, 1: monthly
+no_of_iterations: 1 # number of iterations for bias correction, generally 1
+missing_value: 0.00001 # missing value in the input data
+moving_window: 15 # centred moving window if input data is at daily time scale
+correction_model: 4 # 1: mean, 2: mean and variance, 3: nested, 4: multivariate
+sub_daily_correction: False # sub-daily bias correction, Yes: True, No: False
+
+# Selected area ---------------------------------------------------
+# latitudes and longitudes of the selected area
+lat_min: -85
+lat_max: 85
+lon_min: 0
+lon_max: 360
+
+# Physical upper limit (wind speed (m/s), temperature (K), specific humidity (g/kg), sea surface temperature (K))
+upper_limit: [190, 330, 100, 330]
+lower_limit: [0.001, 137, 0.001, 270]
+
+# Options for bias correction
+save_bc_output: true # save the bias corrected output, if not, only the BC factors will be saved
+draw_figure: False # draw the figures
+reformat_to_original: true # reformat the output to the original format
+
+# =============== Input for bias correction ended =========================
