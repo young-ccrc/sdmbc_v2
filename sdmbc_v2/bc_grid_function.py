@@ -23,7 +23,8 @@ import numpy as np
 import pandas as pd  # type: ignore
 import xarray as xr  # climate data manipulation library  # type: ignore
 from config import config
-from data_preparation import (
+
+from sdmbc_v2.data_preparation import (
     align_daily_data_xr,
     assign_w_6hr,
     convert_6hr_to_original_xr,
@@ -33,7 +34,7 @@ from data_preparation import (
 )
 
 # from mrmbc import constants as cons  # type: ignore
-from sdmbc_bc_function import (
+from sdmbc_v2.sdmbc_bc_function import (
     bc_correction_future,
     bc_correction_hist,
     bc_correction_with_rescaling,

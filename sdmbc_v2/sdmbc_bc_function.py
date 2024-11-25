@@ -40,13 +40,13 @@ import xarray as xr  # type: ignore
 from config import config
 
 # import yaml  # type: ignore
-from data_preparation import is_leap_year
+from sdmbc_v2.data_preparation import is_leap_year
 
 # import pandas as pd  # dataFrames
 # ==========================================================================#
 # calling fortran subroutines
 # from mrmbc import constants as cons  # type: ignore
-from mrmbc import mbc_subroutines as mbc  # type: ignore
+from sdmbc_v2.mrmbc import mbc_subroutines as mbc  # type: ignore
 
 # ==========================================================================#
 
