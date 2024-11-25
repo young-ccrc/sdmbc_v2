@@ -1,25 +1,26 @@
 #! usr/bin/python
-# Funtions for main_reformat.py
-# -----------------------------------------------------------------------------------------------------------------
-# This is a Python script named "inputfunction.py" that contains a set of functions
-# to be used in another script named "main_reformat.py".
+"""
+Funtions for main_reformat.py
+-----------------------------------------------------------------------------------------------------------------
+This is a Python script named "inputfunction.py" that contains a set of functions
+to be used in another script named "main_reformat.py".
 
-# The script imports the following modules:
-# "user_input", "numpy", "pandas", "xarray", and "glob".
-# It defines several functions that will be used in the "main_reformat.py" script
-# to perform some data processing tasks.
-#
-# The functions are:
-#
-# add_lev_dim(new): This function adds a new dimension named "lev" to a netCDF file.
-#
-# copyenv(new, old, vn, vo): This function copies the environment of 3D variables (latitude, longitude, and time)
-# from an old netCDF file to a new one, as well as the attributes and encoding of the variable of interest.
-#
-# reformatsave(bcf, var_new, var_old, y): This function is the main function for reformatting and saving output
-# as netCDF format. It opens raw GCM datasets, renames variable names, concatenates if needed,
-# transposes dimensions, creates a new dataset, copies attributes, changes values, and encodes the output.
+The script imports the following modules:
+"user_input", "numpy", "pandas", "xarray", and "glob".
+It defines several functions that will be used in the "main_reformat.py" script
+to perform some data processing tasks.
 
+The functions are:
+
+add_lev_dim(new): This function adds a new dimension named "lev" to a netCDF file.
+
+copyenv(new, old, vn, vo): This function copies the environment of 3D variables (latitude, longitude, and time)
+from an old netCDF file to a new one, as well as the attributes and encoding of the variable of interest.
+
+reformatsave(bcf, var_new, var_old, y): This function is the main function for reformatting and saving output
+as netCDF format. It opens raw GCM datasets, renames variable names, concatenates if needed,
+transposes dimensions, creates a new dataset, copies attributes, changes values, and encodes the output.
+"""
 import argparse
 
 # Written by Youngil(Young) Kim
@@ -40,7 +41,8 @@ import xarray as xr  # type: ignore
 from cdo import Cdo  # type: ignore
 from config import config
 from dask.distributed import Client  # type: ignore
-from interpolation import regrid
+
+from sdmbc_v2.interpolation import regrid
 
 cdo = Cdo()
 # Load pacakges end ================================

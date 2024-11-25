@@ -1,0 +1,2 @@
+[console_scripts]
+fortls = fortls.__init__:main
