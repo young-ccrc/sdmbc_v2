@@ -1,3 +1,19 @@
+"""
+Bias Correction Grid Function Module for SDMBCv2
+
+This script provides core functionality for performing bias correction on climate model data using the SDMBCv2 framework. 
+It includes various utilities for applying bias correction to historical data, rescaling future climate projections, 
+and handling sub-daily correction with boundary adjustments.
+
+Main features of this script:
+- Uses Dask for distributed parallel processing.
+- Implements historical and future bias correction methods.
+- Supports splitting spatial domains into grid cells for large-scale data correction.
+- Incorporates functionalities for boundary conditions and rescaling.
+
+This module is intended to be used as part of the SDMBCv2 package for correcting bias in GCM (Global Climate Model) and observational datasets.
+"""
+
 import itertools  # type: ignore
 import os
 
@@ -36,6 +52,16 @@ var_list = (
 
 
 def correction_wrapper(gcm_data, obs_data):
+    """
+    Wrapper function to apply bias correction for historical GCM data.
+
+    Args:
+        gcm_data (array-like): Stacked GCM (Global Climate Model) data for each variable.
+        obs_data (array-like): Stacked observational data for each variable.
+
+    Returns:
+        tuple: Corrected GCM data and bias correction parameters.
+    """
     grid_cell_gcm = np.stack(gcm_data, axis=0)  # Shape should be (3, 31, 12, 31)
     grid_cell_obs = np.stack(obs_data, axis=0)  # Shape should be (3, 31, 12, 31)
     result_dict = bc_correction_hist(grid_cell_gcm, grid_cell_obs)
@@ -43,6 +69,16 @@ def correction_wrapper(gcm_data, obs_data):
 
 
 def correction_wrapper_future(gcm_data, bc_params_array):
+    """
+    Wrapper function to apply bias correction for future GCM data.
+
+    Args:
+        gcm_data (array-like): Stacked GCM data for each variable.
+        bc_params_array (array-like): Bias correction parameters from historical bias correction.
+
+    Returns:
+        array-like: Bias-corrected future GCM data.
+    """
     grid_cell_gcm = np.stack(gcm_data, axis=0)  # Shape should be (3, 31, 12, 31)
     result_dict = bc_correction_future(
         grid_cell_gcm, bc_params_array, config.startyear_f, config.endyear_f
@@ -51,6 +87,18 @@ def correction_wrapper_future(gcm_data, bc_params_array):
 
 
 def process_grid_cell(lat, lon, reshaped_gcm, reshaped_obs):
+    """
+    Perform bias correction for a single grid cell.
+
+    Args:
+        lat (float): Latitude of the grid cell.
+        lon (float): Longitude of the grid cell.
+        reshaped_gcm (xarray.Dataset): GCM data reshaped for correction.
+        reshaped_obs (xarray.Dataset): Observational data reshaped for correction.
+
+    Returns:
+        dict: Contains corrected GCM data and bias correction parameters.
+    """
     gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
     obs_data = [reshaped_obs[var].sel(lat=lat, lon=lon).values for var in var_list_w]
 
@@ -66,6 +114,18 @@ def process_grid_cell(lat, lon, reshaped_gcm, reshaped_obs):
 
 
 def process_grid_cell_future(lat, lon, reshaped_gcm, bc_params_array):
+    """
+    Perform bias correction for a single grid cell for future data.
+
+    Args:
+        lat (float): Latitude of the grid cell.
+        lon (float): Longitude of the grid cell.
+        reshaped_gcm (xarray.Dataset): GCM data reshaped for correction.
+        bc_params_array (xarray.Dataset): Bias correction parameters.
+
+    Returns:
+        dict: Contains bias-corrected GCM data for the future period.
+    """
     gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
     params_data = bc_params_array.sel(lat=lat, lon=lon)
     # Apply the correction
@@ -80,6 +140,17 @@ def process_grid_cell_future(lat, lon, reshaped_gcm, bc_params_array):
 
 # Delay the rescaling and reformatting steps until after the initial corrections are computed
 def rescale_and_reformat(gcmc_corrected, ff_gcm, ff_obs):
+    """
+    Rescale and reformat corrected GCM data using fraction factors for sub-daily adjustments.
+
+    Args:
+        gcmc_corrected (xarray.Dataset): Bias-corrected GCM data.
+        ff_gcm (xarray.Dataset): Fraction factors for GCM data.
+        ff_obs (xarray.Dataset): Fraction factors for observational data.
+
+    Returns:
+        xarray.Dataset: Six-hourly rescaled bias-corrected GCM data.
+    """
     # Rescale and Reformat using Fraction Factors and Sliced GCM Data
     if config.sub_daily_correction:
         gcm_corrected = bc_correction_with_rescaling(
@@ -101,6 +172,18 @@ def rescale_and_reformat(gcmc_corrected, ff_gcm, ff_obs):
 
 
 def rescale_and_reformat_future(gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future):
+    """
+    Rescale and reformat corrected GCM data for future scenarios using fraction factors.
+
+    Args:
+        gcmc_corrected (xarray.Dataset): Corrected GCM data.
+        ff_gcm (xarray.Dataset): Fraction factors for GCM data.
+        ff_obs (xarray.Dataset): Fraction factors for observational data.
+        ff_gcm_future (xarray.Dataset): Fraction factors for future GCM data.
+
+    Returns:
+        xarray.Dataset: Rescaled future six-hourly bias-corrected GCM data.
+    """
     # Rescale and Reformat using Fraction Factors and Sliced GCM Data
     if config.sub_daily_correction:
         gcm_corrected = empirical_quantile_mapping_future_xarray(
@@ -141,6 +224,16 @@ def rescale_and_reformat_future(gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future):
 
 # Delay the boundary condition correction if needed
 def apply_boundary_correction(six_hourly_data_hist, sliced_gcm):
+    """
+    Apply boundary correction to the six-hourly bias-corrected GCM data.
+
+    Args:
+        six_hourly_data_hist (xarray.Dataset): Six-hourly rescaled bias-corrected GCM data.
+        sliced_gcm (xarray.Dataset): GCM data with selected boundary components.
+
+    Returns:
+        xarray.Dataset: Bias-corrected GCM data with boundaries applied.
+    """
 
     if config.bc_boundary == "lateral":
         # Select the u and v wind components for the grid cells
@@ -162,6 +255,23 @@ def process_tile(
     config,
     temp_dir,
 ):
+    """
+    Process a single tile for bias correction, involving loading GCM and observational data,
+    performing bias correction, and saving the outputs.
+
+    Args:
+        tile (dict): Dictionary defining the spatial bounds of the tile.
+        variables (list): List of variable names to process.
+        file_paths_by_variable_gcm (dict): File paths for GCM data by variable.
+        file_paths_by_variable_obs (dict): File paths for observational data by variable.
+        level (int): Processing level for multilevel data.
+        config (module): Configuration object for bias correction parameters.
+        temp_dir (str): Path to the temporary directory for intermediate files.
+
+    Returns:
+        None
+    """
+
     """Process a single tile for bias correction."""
     lat_range = (tile["lat_min"], tile["lat_max"])
     lon_range = (tile["lon_min"], tile["lon_max"])
@@ -310,18 +420,21 @@ def preprocess_and_save_obs(
     endyear_h,
 ):
     """
-    Preprocess and save observational data to temporary files for each tile.
+    Preprocess and save observational data for each tile.
 
     Args:
-        file_paths (list of str): Paths to observation files.
-        temp_dir (str): Path to temporary directory.
-        var_name (str): Name of the variable to preprocess.
+        tile (dict): Dictionary specifying the spatial bounds of the tile.
+        file_paths (list): Paths to observation files.
+        temp_dir (str): Directory to save preprocessed data.
+        var_name (str): Name of the variable.
+        level_index (int): Index for specific levels in the data.
         lat_min, lat_max, lon_min, lon_max (float): Spatial extent for subsetting.
         startyear_h, endyear_h (int): Temporal range for subsetting.
 
     Returns:
-        str: Path to the preprocessed NetCDF file.
+        str: Path to the saved preprocessed data file.
     """
+
     # Create the temporary folder if it doesn't exist
     os.makedirs(temp_dir, exist_ok=True)
 
@@ -395,21 +508,21 @@ def load_preprocess_variable(
     file_paths, var_name, level_index, lat_range, lon_range, startyear_h, endyear_h
 ):
     """
-    Load and preprocess a variable from multiple files, combining them into a single dataset.
+    Load and preprocess a variable from multiple files.
 
     Args:
-        file_paths (list of str): List of file paths to open.
-        var_name (str): Name of the variable to load.
-        level_index (int): Index of the level to select (if applicable).
-        lat_range (tuple): Latitude range to subset (min, max).
-        lon_range (tuple): Longitude range to subset (min, max).
-        startyear_h (int): Start year for time range.
-        endyear_h (int): End year for time range.
-        bc_boundary (str): Boundary type ('lateral' or otherwise).
+        file_paths (list of str): Paths to the data files.
+        var_name (str): Name of the variable.
+        level_index (int): Index for selecting specific levels.
+        lat_range (tuple): Latitude range to subset.
+        lon_range (tuple): Longitude range to subset.
+        startyear_h (int): Start year for the time range.
+        endyear_h (int): End year for the time range.
 
     Returns:
-        xarray.DataArray: Preprocessed dataset.
+        xarray.DataArray: Preprocessed dataset for the variable.
     """
+
     ds_sel = xr.open_mfdataset(
         file_paths,
         combine="by_coords",
@@ -531,17 +644,16 @@ def bc_correction_grid_cell_hist_dask_2d(
     startyear_h,
 ):
     """
-    Perform bias correction across all grid cells in parallel using Dask.
+    Perform bias correction for historical GCM data across all grid cells in parallel using Dask.
 
-    Parameters:
-    - reshaped_gcm: Xarray Dataset containing GCM data with dimensions (year, month, day, lat, lon)
-    - reshaped_obs: Xarray Dataset containing observational data with dimensions (year, month, day, lat, lon)
-    - var_list_w: List of variables to be corrected
-    - sliced_gcm: Xarray Dataset containing sliced GCM data (ua and va components) with dimensions (time, lat, lon)
-    - startyear_h, endyear_h: Start and end years for the historical period
+    Args:
+        reshaped_gcm (xarray.Dataset): Reshaped GCM data.
+        reshaped_obs (xarray.Dataset): Reshaped observational data.
+        var_list_w (list of str): List of variables to be corrected.
+        startyear_h (int): Start year for historical correction.
 
     Returns:
-    - ds_corrected: Xarray Dataset with corrected data and bias correction parameters
+        tuple: Corrected GCM data and bias correction parameters.
     """
 
     # Generate tasks for each grid cell
@@ -606,6 +718,22 @@ def bc_correction_grid_cell_future_subdaily_dask(
     var_list_w,
     sliced_gcm_future,
 ):
+    """
+    Perform sub-daily bias correction for future GCM data across all grid cells in parallel using Dask.
+
+    Args:
+        ff_gcm, ff_obs: Fraction factors for GCM and observational data.
+        gcm_future (xarray.Dataset): GCM data for future period.
+        ff_gcm_future: Fraction factors for future GCM data.
+        bc_params_array: Bias correction parameters.
+        startyear_f (int): Start year of the future period.
+        endyear_f (int): End year of the future period.
+        var_list_w (list of str): List of variable names to be corrected.
+        sliced_gcm_future (xarray.Dataset): Sliced GCM data.
+
+    Returns:
+        xarray.Dataset: Bias-corrected six-hourly GCM data for the future.
+    """
 
     # Generate tasks for each grid cell
     tasks = [
@@ -676,6 +804,22 @@ def bc_correction_grid_cell_future_daily_dask(
     var_list_w,
     sliced_gcm_future,
 ):
+    """
+    Perform daily bias correction for future GCM data across all grid cells in parallel using Dask.
+
+    Args:
+        ff_gcm, ff_obs: Fraction factors for GCM and observational data.
+        gcm_future (xarray.Dataset): GCM data for future period.
+        ff_gcm_future: Fraction factors for future GCM data.
+        bc_params_array: Bias correction parameters.
+        startyear_f (int): Start year of the future period.
+        endyear_f (int): End year of the future period.
+        var_list_w (list of str): List of variable names to be corrected.
+        sliced_gcm_future (xarray.Dataset): Sliced GCM data.
+
+    Returns:
+        xarray.Dataset: Bias-corrected daily GCM data for the future.
+    """
 
     # grid_cells = list(itertools.product(gcm_future.lat.values, gcm_future.lon.values))
     # batch_size = 20  # Process 20 grid cells at a time
@@ -744,11 +888,30 @@ def bc_correction_grid_cell_future_daily_dask(
 
 
 def is_leap_year(year):
-    """Check if a year is a leap year."""
+    """
+    Check if a given year is a leap year.
+
+    Args:
+        year (int): Year to be checked.
+
+    Returns:
+        bool: True if the year is a leap year, otherwise False.
+    """
+
     return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
 
 
 def adjust_dates_to_target_year(corrected_data, target_year):
+    """
+    Adjust the dates of corrected data to align with a target year, accounting for leap years.
+
+    Args:
+        corrected_data (xarray.Dataset): Corrected dataset to adjust.
+        target_year (int): Target year for the adjustment.
+
+    Returns:
+        xarray.Dataset: Dataset with adjusted dates.
+    """
 
     # Create 'hourofyear' directly, excluding February 29 if necessary
     if is_leap_year(target_year):
@@ -794,6 +957,24 @@ def apply_moving_window_bias_correction(
     end_year,
     window_size=30,
 ):
+    """
+    Apply moving window bias correction over a given time frame for a grid cell.
+
+    Args:
+        lat (float): Latitude of the grid cell.
+        lon (float): Longitude of the grid cell.
+        gcm_future (xarray.Dataset): Future GCM data.
+        gcm_ref (xarray.Dataset): Reference GCM data.
+        fraction_factors (xarray.Dataset): Fraction factors for correction.
+        bc_params_array (xarray.Dataset): Bias correction parameters.
+        start_year (int): Start year for bias correction.
+        end_year (int): End year for bias correction.
+        window_size (int, optional): Size of the moving window for correction. Defaults to 30.
+
+    Returns:
+        xarray.Dataset: Bias-corrected dataset for the specified grid cell and time window.
+    """
+
     corrected_dataset = xr.Dataset()
 
     for target_year in range(start_year, end_year + 1):

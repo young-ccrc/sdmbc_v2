@@ -60,6 +60,7 @@ def setup_client(n_workers=None, threads_per_worker=None):
     Returns:
         Client: A Dask distributed client instance.
     """
+
     if n_workers is None or threads_per_worker is None:
         c = Client()
     else:
@@ -70,11 +71,13 @@ def setup_client(n_workers=None, threads_per_worker=None):
 
 def parse_arguments():
     """
-    Parse command-line arguments.
+    Parse command-line arguments for running atmospheric data interpolation.
 
     Returns:
-        argparse.Namespace: Parsed arguments.
+        argparse.Namespace: Parsed arguments including configuration file path, variable names,
+        start year, and end year.
     """
+
     parser = argparse.ArgumentParser(description="Run atmospheric data interpolation.")
     parser.add_argument(
         "--config",
@@ -103,9 +106,15 @@ def parse_arguments():
 
 def add_lev_dim(new):
     """
-    Add levels to the bias-corrected netcdf files
+    Add a level dimension ("lev") to the bias-corrected netCDF file if not present.
 
+    Args:
+        new (xarray.Dataset): The dataset to which the level dimension should be added.
+
+    Returns:
+        xarray.Dataset: Modified dataset with the level dimension added.
     """
+
     if "lev" not in new.dims:
         new = new.expand_dims(lev=1)
     return new
@@ -113,10 +122,19 @@ def add_lev_dim(new):
 
 def copyenv(new, old, vn, vo):
     """
-    Copies the environment of 3D variables from an old netCDF file to a new one,
-    along with variable attributes and encoding.
-    Also adds level dimension if the variable is not sea surface temperature.
+    Copy the environment of 3D variables (latitude, longitude, time) from an old netCDF file to a new one.
+    Also copies the attributes, encoding, and level dimension if applicable.
+
+    Args:
+        new (xarray.Dataset): The new dataset to which information will be copied.
+        old (xarray.Dataset): The old dataset providing the information.
+        vn (str): Name of the variable in the new dataset.
+        vo (str): Name of the variable in the old dataset.
+
+    Returns:
+        xarray.Dataset: Updated new dataset with copied environment and attributes.
     """
+
     # Copy dimensions and their attributes and encoding
     for dim in ["lat", "lon", "time"]:
         new[dim] = old[dim]
@@ -142,9 +160,19 @@ def copyenv(new, old, vn, vo):
 
 def extract_time_range(filename):
     """
-    Extracts the start and end time from the given filename.
+    Extract the start and end time from the given filename.
     Assumes the filename contains the time range in the format 'YYYYMMDDHHMM-YYYYMMDDHHMM'.
+
+    Args:
+        filename (str): The filename from which to extract the time range.
+
+    Returns:
+        tuple: A tuple containing the start and end times as strings.
+
+    Raises:
+        ValueError: If the filename does not contain a valid time range.
     """
+
     match = re.search(r"(\d{12})-(\d{12})", filename)
     if match:
         start_time = match.group(1)
@@ -158,17 +186,18 @@ def reformatsave_3d(bcf, var_new, var_old, y, input_files, out_path):
     """
     Reformat and save a 3D variable from bias-corrected data.
 
-    Parameters:
-    bcf (xarray.Dataset): An array containing bias-corrected GCM data over the research periods.
-    var_new (str): Bias-corrected variable's name.
-    var_old (str): Original GCM variable's name.
-    y (int): The current year being processed.
-    input_files (list): List of input file paths for the given year.
-    out_path (str): Output path to save the netCDF files.
+    Args:
+        bcf (xarray.Dataset): Bias-corrected GCM data over the research periods.
+        var_new (str): New variable name for bias-corrected data.
+        var_old (str): Original GCM variable name.
+        y (int): The current year being processed.
+        input_files (list): List of input file paths for the given year.
+        out_path (str): Output path to save the netCDF files.
 
     Returns:
-    list of tuples: Each tuple contains the reformatted dataset and its corresponding output filename.
+        list of tuples: Each tuple contains the reformatted dataset and its corresponding output filename.
     """
+
     # Open and concatenate datasets
     esmf = xr.open_mfdataset(input_files, combine="by_coords")
 
@@ -294,22 +323,16 @@ def reformat_and_save_3d(
     """
     Reformat and save 3D bias-corrected data to netCDF files.
 
-    Parameters:
-    bc_path (str): Path to the bias-corrected data files.
-    tlevel (int): Total number of vertical levels.
-    startyear (int): The first year of the data.
-    endyear (int): The last year of the data.
-    input_vargcm (list): List of input variable names from the GCM.
-    origin_vargcm (list): List of original variable names from the GCM.
-    out_path (str): Path to save the output netCDF files.
-    infor (str): Additional information for the output file names.
-    gname (str): Name of the GCM model.
-    period (str): Time period information for the output file names.
-    cinfor (str): Additional information for the output file names.
-    sinfor (str): Additional information for the output file names.
+    Args:
+        bc_path (str): Path to the bias-corrected data files.
+        tlevel (int): Total number of vertical levels.
+        startyear (int): The first year of the data.
+        endyear (int): The last year of the data.
+        input_vargcm (list): List of input variable names from the GCM.
+        origin_vargcm (list): List of original variable names from the GCM.
 
     Returns:
-    None: Saves the reformatted data to netCDF files in the specified output path.
+        None: Saves the reformatted data to netCDF files in the specified output path.
     """
 
     # Load bias-corrected data
@@ -367,7 +390,15 @@ def reformat_and_save_3d(
 def add_lat_lon_bnds(input_file, output_file):
     """
     Add latitude and longitude bounds if they are missing in the input file.
+
+    Args:
+        input_file (str): Path to the input netCDF file.
+        output_file (str): Path to the output netCDF file where bounds are added.
+
+    Returns:
+        None: Saves the updated netCDF file.
     """
+
     ds = xr.open_dataset(input_file)
 
     if "lat_bnds" not in ds.variables or "lon_bnds" not in ds.variables:
@@ -397,7 +428,17 @@ def add_lat_lon_bnds(input_file, output_file):
 def reformat_and_save_2d(input_path, original_file, output_file, remap_weights_file):
     """
     Regrid the bias-corrected input data to the original grid using CDO.
+
+    Args:
+        input_path (str): Path to the bias-corrected input netCDF file.
+        original_file (str): Path to the original netCDF file to use as a grid reference.
+        output_file (str): Path to the output netCDF file after regridding.
+        remap_weights_file (str): Path to store remapping weights generated during regridding.
+
+    Returns:
+        None: Saves the regridded netCDF file.
     """
+
     # Add lat_bnds and lon_bnds to the input file if necessary
     input_with_bnds = input_path.replace(".nc", "_with_bnds.nc")
     add_lat_lon_bnds(input_path, input_with_bnds)
@@ -419,6 +460,16 @@ def reformat_and_save_2d(input_path, original_file, output_file, remap_weights_f
 
 # ---------------------------------------------------------------------------------------------------
 def main(config):
+    """
+    Main function to initiate the reformatting process for bias-corrected GCM data.
+
+    Args:
+        config (module): Configuration object that contains user-defined parameters such as
+        start year, end year, output paths, etc.
+
+    Returns:
+        None: Initiates the reformatting for both 2D and 3D data based on the given configuration.
+    """
 
     setup_client()
 

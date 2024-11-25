@@ -1,3 +1,28 @@
+"""
+SDMBCv2 Historical Bias Correction Main Script for Surface Variables
+
+This script is used to perform bias correction on historical surface climate data 
+using the SDMBCv2 package. It uses Dask for parallel processing and handles 
+large-scale data processing, including loading, preprocessing, splitting domains 
+into tiles, and bias correction.
+
+Key features of the script:
+- Set up Dask distributed client for parallel computation.
+- Load and preprocess GCM and observational datasets.
+- Perform bias correction for each lat/lon tile.
+- Save intermediate files and bias-corrected outputs.
+- Optional drawing of figures and reformatting to original formats.
+
+Usage:
+This script can be executed by providing a configuration YAML file that defines 
+various input parameters, such as variable names, start and end years, paths, etc.
+
+Modules imported:
+- argparse: for handling command line arguments.
+- numpy, xarray, Dask: for numerical computations and distributed processing.
+- SDMBCv2 specific modules: for bias correction and data preparation functions.
+"""
+
 import argparse
 import importlib
 import os
@@ -39,8 +64,8 @@ def setup_client(n_workers=None, threads_per_worker=None):
     Set up Dask client for parallel processing, allowing customization of workers and threads.
 
     Args:
-        n_workers (int): Number of workers to use.
-        threads_per_worker (int): Number of threads per worker.
+        n_workers (int, optional): Number of workers to use. Defaults to None.
+        threads_per_worker (int, optional): Number of threads per worker. Defaults to None.
 
     Returns:
         Client: A Dask distributed client instance.
@@ -55,10 +80,10 @@ def setup_client(n_workers=None, threads_per_worker=None):
 
 def parse_arguments():
     """
-    Parse command-line arguments.
+    Parse command-line arguments for configuration setup.
 
     Returns:
-        argparse.Namespace: Parsed arguments.
+        argparse.Namespace: Parsed arguments including configuration file path and variables.
     """
     parser = argparse.ArgumentParser(description="Run atmospheric data interpolation.")
     parser.add_argument(
@@ -87,6 +112,20 @@ def parse_arguments():
 
 
 def split_domain(lat_min, lat_max, lon_min, lon_max, n_lat_tiles, n_lon_tiles):
+    """
+    Split the spatial domain into smaller latitude and longitude tiles.
+
+    Args:
+        lat_min (float): Minimum latitude of the domain.
+        lat_max (float): Maximum latitude of the domain.
+        lon_min (float): Minimum longitude of the domain.
+        lon_max (float): Maximum longitude of the domain.
+        n_lat_tiles (int): Number of latitude tiles.
+        n_lon_tiles (int): Number of longitude tiles.
+
+    Returns:
+        list: List of dictionaries containing the bounds of each tile.
+    """
     # Create ranges for latitude and longitude tiles
     lat_ranges = np.linspace(lat_min, lat_max, n_lat_tiles + 1, endpoint=True)
     lon_ranges = np.linspace(lon_min, lon_max, n_lon_tiles + 1, endpoint=True)
@@ -106,7 +145,12 @@ def split_domain(lat_min, lat_max, lon_min, lon_max, n_lat_tiles, n_lon_tiles):
 
 
 def main(config):
+    """
+    Main function to run the SDMBCv2 bias correction process.
 
+    Args:
+        config (module): Configuration object that contains all user-defined parameters for the process.
+    """
     setup_client()
 
     startyear_h = config.startyear_h

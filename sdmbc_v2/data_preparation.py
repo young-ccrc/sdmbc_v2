@@ -1,3 +1,40 @@
+"""
+Data Preparation Module for SDMBCv2
+
+This script provides a comprehensive set of functions used for preparing climate data 
+for bias correction within the SDMBCv2 framework. It includes functionalities to load, 
+preprocess, and reshape GCM and observational data to ensure the correct format and 
+structure required for the bias correction process. This module is intended to support 
+both historical and future climate model data as well as observational datasets.
+
+Main Features of the Script:
+- **Configuration Management**: Load configuration settings from a YAML file to customize 
+  parameters for different experiments.
+- **Data Loading and Preprocessing**: Load GCM, observational, and future climate data, 
+  and preprocess them for bias correction, including operations like slicing, combining 
+  multiple variables, and rescaling.
+- **Temporal Adjustments**: Convert between different temporal resolutions (daily to 
+  6-hourly) using fractional scaling to preserve physical characteristics.
+- **Spatial Adjustments**: Split the spatial domain into tiles, apply boundary corrections, 
+  and handle rescaling of GCM data to better match observational data.
+- **Validation and Verification**: Validate data integrity, such as ensuring the absence 
+  of NaN values and verifying consistency between input files and expected parameters.
+
+The module is designed to facilitate efficient data preparation, including handling large-scale 
+datasets with Dask for parallel processing, and accommodating different spatial and temporal 
+resolutions.
+
+Usage:
+This script is not intended to be run directly but rather imported into other scripts 
+as part of the SDMBCv2 workflow. The functions provide modular capabilities to handle 
+a variety of preprocessing steps for GCM and observational data.
+
+Modules Imported:
+- **xarray, numpy, pandas**: For numerical and array manipulations commonly used in climate data.
+- **Dask**: To enable parallel computation, particularly useful for large-scale climate model datasets.
+- **SDMBCv2 Specific Functions**: To support bias correction, variable extraction, and other key processes.
+"""
+
 import glob
 import re
 
@@ -52,11 +89,32 @@ class Config:
 
 
 def validate_inputs(lat_min, lat_max):
+    """
+    Validate latitude inputs to ensure they fall within the correct range.
+
+    Args:
+        lat_min (float): Minimum latitude value.
+        lat_max (float): Maximum latitude value.
+
+    Raises:
+        ValueError: If latitude values are not within the range -90 to 90.
+    """
+
     if not (-90 <= lat_min <= 90) or not (-90 <= lat_max <= 90):
         raise ValueError("Latitude values must be between -90 and 90.")
 
 
 def verify_output(file_path):
+    """
+    Verify if the output file exists and can be opened.
+
+    Args:
+        file_path (str): Path to the file to be verified.
+
+    Prints:
+        Verification status message.
+    """
+
     try:
         xr.open_dataset(file_path)
         print(f"Successfully verified the output file: {file_path}")
@@ -65,11 +123,34 @@ def verify_output(file_path):
 
 
 def initialize_data_arrays(dims_time, dims_lat, dims_lon, var_list):
+    """
+    Initialize empty data arrays for the given dimensions and variables.
+
+    Args:
+        dims_time (int): Number of time steps.
+        dims_lat (int): Number of latitude points.
+        dims_lon (int): Number of longitude points.
+        var_list (list): List of variable names.
+
+    Returns:
+        dict: Dictionary of initialized arrays with variable names as keys.
+    """
+
     return {var: np.zeros((dims_time, dims_lat, dims_lon)) for var in var_list}
 
 
 # Function to extract the year range from the filename
 def extract_years(filename):
+    """
+    Extract the start and end years from the filename.
+
+    Args:
+        filename (str): The filename containing the year information.
+
+    Returns:
+        tuple: Start and end year extracted from the filename, or None if not found.
+    """
+
     match = re.search(r"_(\d{8})-(\d{8})\.nc", filename)
     if match:
         start = int(match.group(1)[:4])
@@ -80,12 +161,35 @@ def extract_years(filename):
 
 # Function to check if the file overlaps with the desired period
 def is_within_period(file_start, file_end, target_start, target_end):
+    """
+    Check if the file's period overlaps with the target period.
+
+    Args:
+        file_start (int): Start year of the file.
+        file_end (int): End year of the file.
+        target_start (int): Target start year.
+        target_end (int): Target end year.
+
+    Returns:
+        bool: True if the file period overlaps with the target period, False otherwise.
+    """
+
     # True if file period overlaps with the target period
     return not (file_end < target_start or file_start > target_end)
 
 
 # Function to extract the year range from the filename
 def extract_years_remap(filename):
+    """
+    Extract the start and end years from remapped filenames.
+
+    Args:
+        filename (str): The filename containing the year information.
+
+    Returns:
+        tuple: Start and end year extracted from the filename, or None if not found.
+    """
+
     match = re.search(r"_(\d{8})-(\d{8})\_remapped.nc", filename)
     if match:
         start = int(match.group(1)[:4])
@@ -106,6 +210,20 @@ def generate_file_paths(
     start_year,
     end_year,
 ):
+    """
+    Generate file paths for given parameters within a specified year range.
+
+    Args:
+        base_path (str): Base directory path.
+        variable (str): Variable name.
+        infor, gname, period, cinfor, sinfor, version (str): Metadata strings.
+        start_year (int): Start year.
+        end_year (int): End year.
+
+    Returns:
+        list: List of generated file paths.
+    """
+
     file_paths = []
     if config.bc_boundary == "lateral":
         for year in range(start_year, end_year + 1):
@@ -147,6 +265,20 @@ def generate_file_paths_obs(
     start_year,
     end_year,
 ):
+    """
+    Generate observational file paths for given parameters within a specified year range.
+
+    Args:
+        base_path (str): Base directory path.
+        variable (str): Variable name.
+        gname (str): GCM name.
+        start_year (int): Start year.
+        end_year (int): End year.
+
+    Returns:
+        list: List of generated file paths for observation data.
+    """
+
     # output_file = f"{output_path}/{target_var}_{gname}_{year}-{month:02}.nc"
     file_paths = []
     for year in range(start_year, end_year + 1):
@@ -159,6 +291,16 @@ def generate_file_paths_obs(
 
 
 def slice_data(ds):
+    """
+    Slice the dataset to a specific latitude and longitude range.
+
+    Args:
+        ds (xarray.Dataset): Dataset to be sliced.
+
+    Returns:
+        xarray.Dataset: Sliced dataset.
+    """
+
     try:
         sliced_dataset = ds.transpose("time", "lat", "lon").sel(
             lat=slice(config.lat_min, config.lat_max),
@@ -171,6 +313,16 @@ def slice_data(ds):
 
 
 def load_and_slice_data(file_paths):
+    """
+    Load and slice data from multiple files.
+
+    Args:
+        file_paths (list of str): List of file paths.
+
+    Returns:
+        xarray.Dataset: Loaded and sliced dataset.
+    """
+
     # First, check each file individually
     for file_path in file_paths:
         try:
@@ -198,6 +350,22 @@ def load_and_slice_data(file_paths):
 def load_preprocess_variable(
     file_paths, var_name, level_index, lat_range, lon_range, startyear_h, endyear_h
 ):
+    """
+    Load and preprocess a variable from multiple files.
+
+    Args:
+        file_paths (list of str): Paths to the data files.
+        var_name (str): Name of the variable.
+        level_index (int): Index for selecting specific levels.
+        lat_range (tuple): Latitude range to subset.
+        lon_range (tuple): Longitude range to subset.
+        startyear_h (int): Start year for the time range.
+        endyear_h (int): End year for the time range.
+
+    Returns:
+        xarray.DataArray: Preprocessed dataset for the variable.
+    """
+
     ds = xr.open_mfdataset(
         file_paths,
         combine="by_coords",
@@ -249,15 +417,47 @@ def contains_nan(data):
 
 
 def is_leap_year(year):
+    """
+    Determine whether a given year is a leap year.
+
+    Args:
+        year (int): Year to check.
+
+    Returns:
+        bool: True if the year is a leap year, otherwise False.
+    """
+
     return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
 
 
 def generate_dates(start_year, end_year):
-    """Generate a complete datetime index for the given year range."""
+    """
+    Generate a complete datetime index for the given year range.
+
+    Args:
+        start_year (int): Start year.
+        end_year (int): End year.
+
+    Returns:
+        pandas.DatetimeIndex: Complete date range for the given years.
+    """
+
     return pd.date_range(start=f"{start_year}-01-01", end=f"{end_year}-12-31", freq="D")
 
 
 def extract_and_reshape_xr(ds_selected, start_year, end_year):
+    """
+    Extract and reshape the given dataset to a structured year-month-day format.
+
+    Args:
+        ds_selected (xarray.Dataset): Dataset to be reshaped.
+        start_year (int): Start year for reshaping.
+        end_year (int): End year for reshaping.
+
+    Returns:
+        xarray.Dataset: Reshaped dataset.
+    """
+
     date_index = generate_dates(start_year, end_year)
     reshaped_data = {}
 
@@ -307,17 +507,16 @@ def extract_and_reshape_xr(ds_selected, start_year, end_year):
 
 def assign_w_day(ds, bc_boundary):
     """
-    Adds daily sum of specific humidity and wind speed to an xarray dataset
-    if the boundary condition is lateral. For surface condition, only the daily
-    sum of specific humidity is added.
+    Adds daily specific humidity and wind speed to an xarray dataset based on boundary conditions.
 
-    Parameters:
-    - ds (xr.Dataset): The original xarray dataset with 'u' and 'v' wind components.
-    - bc_boundary (str): A string indicating the boundary condition type: 'lateral' or 'surface'.
+    Args:
+        ds (xarray.Dataset): Original dataset.
+        bc_boundary (str): Boundary condition type ('lateral' or 'surface').
 
     Returns:
-    - xr.Dataset: The dataset with added variables 'q' for specific humidity and 'w' for wind speed.
+        xarray.Dataset: Modified dataset with additional variables.
     """
+
     # Resample dataset to daily frequency, summing over the day.
     # ds_daily = ds.resample(time="D").sum()
     ds_daily = ds.resample(time="D").mean()
@@ -345,22 +544,32 @@ def assign_w_day(ds, bc_boundary):
 
 
 def calculate_w(u, v):
+    """
+    Calculate wind speed from the u and v wind components.
+
+    Args:
+        u (array-like): Zonal wind component.
+        v (array-like): Meridional wind component.
+
+    Returns:
+        array-like: Wind speed.
+    """
+
     return np.sqrt(u**2 + v**2)
 
 
 def assign_w_6hr(do, bc_boundary):
     """
-    Adds specific humidity (converted to g/kg) and wind speed to an xarray dataset
-    under lateral boundary conditions. For surface boundary conditions, the original
-    dataset is returned without modifications.
+    Add specific humidity and wind speed to an xarray dataset for 6-hourly data based on boundary conditions.
 
-    Parameters:
-    - ds (xr.Dataset): The original xarray dataset with 'u' and 'v' wind components.
-    - bc_boundary (str): A string indicating the boundary condition type: 'lateral' or 'surface'.
+    Args:
+        do (xarray.Dataset): Original dataset.
+        bc_boundary (str): Boundary condition type ('lateral' or 'surface').
 
     Returns:
-    - xr.Dataset: The modified dataset with added variables as per specified boundary conditions.
+        xarray.Dataset: Modified dataset.
     """
+
     ds = do.copy()
     if bc_boundary == "lateral":
         # Convert specific humidity from kg/kg to g/kg directly on the dataset
@@ -387,6 +596,19 @@ def assign_w_6hr(do, bc_boundary):
 
 
 def extract_and_reshape_sam_origin(ds_selected, nvar, start_year, end_year):
+    """
+    Extract and reshape the given dataset to its original format for specific variables.
+
+    Args:
+        ds_selected (xarray.Dataset): Dataset to be reshaped.
+        nvar (int): Number of variables.
+        start_year (int): Start year for reshaping.
+        end_year (int): End year for reshaping.
+
+    Returns:
+        xarray.DataArray: Reshaped dataset.
+    """
+
     # Select data for the desired years
     ds_selected = ds_selected.sel(
         time=slice(f"{start_year}-01-01", f"{end_year}-12-31")
@@ -431,6 +653,18 @@ def extract_and_reshape_sam_origin(ds_selected, nvar, start_year, end_year):
 
 
 def fill_reshaped_data(var, ds_selected, reshaped_data):
+    """
+    Fill reshaped data with values from the selected dataset for the given variable.
+
+    Args:
+        var (str): Variable name.
+        ds_selected (xarray.Dataset): Dataset containing variable values.
+        reshaped_data (xarray.Dataset): Dataset to be filled.
+
+    Returns:
+        xarray.Dataset: Filled dataset.
+    """
+
     reshaped_data[var].loc[
         {
             "year": ds_selected["time.year"],
@@ -444,6 +678,20 @@ def fill_reshaped_data(var, ds_selected, reshaped_data):
 
 
 def extract_and_reshape_delayed(ds_selected, nvar, start_year, end_year, bc_boundary):
+    """
+    Extract and reshape dataset asynchronously, including applying bias correction boundaries.
+
+    Args:
+        ds_selected (xarray.Dataset): Dataset to extract and reshape.
+        nvar (int): Number of variables.
+        start_year (int): Start year.
+        end_year (int): End year.
+        bc_boundary (str): Boundary condition ('lateral' or 'surface').
+
+    Returns:
+        xarray.Dataset: Reshaped and merged dataset.
+    """
+
     ds_selected = ds_selected.sel(
         time=slice(f"{start_year}-01-01", f"{end_year}-12-31")
     )
@@ -489,17 +737,15 @@ def extract_and_reshape_delayed(ds_selected, nvar, start_year, end_year, bc_boun
 
 def convert_to_daily_with_fraction(ds):
     """
-    Convert 6-hourly data in an xarray Dataset to daily data and calculate
-    the fraction factor for each 6-hourly time step relative to the daily mean.
+    Convert 6-hourly data to daily data and calculate fraction factors.
 
-    Parameters:
-        ds (xr.Dataset): The original 6-hourly xarray dataset.
+    Args:
+        ds (xarray.Dataset): Original dataset.
 
     Returns:
-        tuple: A tuple containing:
-            - xr.Dataset: The daily xarray dataset
-            - xr.Dataset: The daily fraction factors xarray dataset
+        tuple: Daily dataset and the corresponding fraction factors.
     """
+
     # Resample the dataset to daily frequency by summing 6-hourly data
     # daily_ds = ds.resample(time="1D").sum()
     # Replace to daily mean
@@ -516,15 +762,16 @@ def convert_to_daily_with_fraction(ds):
 
 def generate_dates_xr(start_year, end_year):
     """
-    Generate a date range considering leap years.
+    Generate a complete date range considering leap years.
 
-    Parameters:
-    - start_year: int, the starting year
-    - end_year: int, the ending year
+    Args:
+        start_year (int): Start year.
+        end_year (int): End year.
 
     Returns:
-    - dates: pandas DatetimeIndex, the generated date range
+        pandas.DatetimeIndex: Generated date range.
     """
+
     dates = pd.date_range(
         start=f"{start_year}-01-01", end=f"{end_year}-12-31", freq="D"
     )
@@ -535,15 +782,16 @@ def generate_dates_6hr(start_year, nyrmax, monmax, ndmax):
     """
     Generate a date range considering leap years.
 
-    Parameters:
-    - start_year: int, the starting year
-    - nyrmax: int, number of years
-    - monmax: int, number of months (typically 12)
-    - ndmax: int, number of days in the longest month (typically 31)
+    Args:
+        start_year (int): The starting year.
+        nyrmax (int): Number of years.
+        monmax (int): Number of months (typically 12).
+        ndmax (int): Number of days in the longest month (typically 31).
 
     Returns:
-    - dates: pandas DatetimeIndex, the generated date range
+        pandas.DatetimeIndex: The generated date range.
     """
+
     dates = []
     for year in range(start_year, start_year + nyrmax):
         for month in range(1, monmax + 1):
@@ -566,12 +814,12 @@ def align_daily_data_xr(daily_data_xr, start_year):
     Align daily data considering leap years and return an xarray Dataset
     with a time dimension replacing the year, month, and day dimensions.
 
-    Parameters:
-    - daily_data_xr: xarray Dataset of daily data with dimensions (year, month, day, lat, lon)
-    - start_year: int, the starting year
+    Args:
+        daily_data_xr (xarray.Dataset): Dataset of daily data with dimensions (year, month, day, lat, lon).
+        start_year (int): The starting year.
 
     Returns:
-    - aligned_data_xr: xarray Dataset aligned with a time dimension
+        xarray.Dataset: Dataset aligned with a time dimension.
     """
 
     # Generate the full range of dates accounting for leap years
