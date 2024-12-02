@@ -469,6 +469,7 @@ def main(config):
     full_bc_corrected = full_bc_corrected.transpose("time", "lat", "lon")
 
     print("save the bc model")
+    full_bc_corrected = full_bc_corrected.astype("float32")
     # Save the BC model
     np.save(
         f"{out_path}/bc_params_2d_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",

@@ -1,0 +1,221 @@
+!    -*- f90 -*-
+! Note: the context of this file is case sensitive.
+
+python module mrmbc ! in 
+    interface  ! in :mrmbc
+        module constants ! in :mrmbc:mbc_subroutines.f90
+            integer, parameter,optional :: ndaymax=366
+            integer, parameter,optional :: nsmax=4
+            integer, parameter,optional :: monmax=12
+            integer, parameter,optional :: ndmax=31
+            integer, parameter,optional :: nyrmax=31
+            integer, parameter,optional :: nvarmax=4
+            integer, parameter,optional :: nhmax=124
+            integer, parameter,optional,depend(ndaymax,nyrmax) :: nnmax=11346
+            integer, parameter,optional :: nsplmax=4
+            integer, parameter,optional :: iteral=4
+        end module constants
+        module svd ! in :mrmbc:mbc_subroutines.f90
+            integer, parameter,optional :: dp=selected_real_kind(12, 60)
+            subroutine drotg(da,db,dc,ds) ! in :mrmbc:mbc_subroutines.f90:svd
+                real(kind=8) intent(inout) :: da
+                real(kind=8) intent(inout) :: db
+                real(kind=8) intent(out) :: dc
+                real(kind=8) intent(out) :: ds
+            end subroutine drotg
+            subroutine dswap1(n,dx,dy) ! in :mrmbc:mbc_subroutines.f90:svd
+                integer intent(in) :: n
+                real(kind=8) dimension(*),intent(inout) :: dx
+                real(kind=8) dimension(*),intent(inout) :: dy
+            end subroutine dswap1
+            subroutine drot1(n,dx,dy,c,s) ! in :mrmbc:mbc_subroutines.f90:svd
+                integer intent(in) :: n
+                real(kind=8) dimension(*),intent(inout) :: dx
+                real(kind=8) dimension(*),intent(inout) :: dy
+                real(kind=8) intent(in) :: c
+                real(kind=8) intent(in) :: s
+            end subroutine drot1
+            subroutine dsvdc(x,n,p,s,e,u,v,job,info) ! in :mrmbc:mbc_subroutines.f90:svd
+                real(kind=8) dimension(:,:),intent(inout) :: x
+                integer intent(in) :: n
+                integer intent(in) :: p
+                real(kind=8) dimension(:),intent(out) :: s
+                real(kind=8) dimension(:),intent(out) :: e
+                real(kind=8) dimension(:,:),intent(out) :: u
+                real(kind=8) dimension(:,:),intent(out) :: v
+                integer intent(in) :: job
+                integer intent(out) :: info
+            end subroutine dsvdc
+        end module svd
+        module mbc_subroutines ! in :mrmbc:mbc_subroutines.f90
+            subroutine day(nday) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                integer dimension(12),intent(out) :: nday
+            end subroutine day
+            subroutine daycount(ns,i,id) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                integer intent(in) :: ns
+                integer intent(in) :: i
+                integer intent(out) :: id
+            end subroutine daycount
+            function iseas(j,isn,ij,isj) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                integer intent(in) :: j
+                integer intent(in) :: isn
+                integer dimension(12),intent(in) :: ij
+                integer dimension(4,12),intent(in) :: isj
+                integer :: iseas
+            end function iseas
+            function iseas_s(j) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                integer intent(in) :: j
+                integer :: iseas_s
+            end function iseas_s
+            subroutine day_pos(i,j,l,nout,ns,ilpg,leap,idays,nday,ny,ind) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                integer intent(inout) :: i
+                integer intent(inout) :: j
+                integer intent(inout) :: l
+                integer intent(in) :: nout
+                integer intent(in) :: ns
+                integer intent(in) :: ilpg
+                integer dimension(4),intent(in) :: leap
+                integer dimension(12,4),intent(in) :: idays
+                integer dimension(12),intent(in) :: nday
+                integer intent(in) :: ny
+                integer intent(out) :: ind
+            end subroutine day_pos
+            subroutine day_neg(i,j,l,nout,ns,ilpg,leap,idays,lag,nday,ind) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                integer intent(inout) :: i
+                integer intent(inout) :: j
+                integer intent(inout) :: l
+                integer intent(in) :: nout
+                integer intent(in) :: ns
+                integer intent(in) :: ilpg
+                integer dimension(4),intent(in) :: leap
+                integer dimension(12,4),intent(in) :: idays
+                integer intent(in) :: lag
+                integer dimension(12),intent(in) :: nday
+                integer intent(out) :: ind
+            end subroutine day_neg
+            subroutine avsdcor(n,r,ax,ay,sx,sy,xx,yy) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                integer intent(in) :: n
+                real intent(out) :: r
+                real intent(out) :: ax
+                real intent(out) :: ay
+                real intent(out) :: sx
+                real intent(out) :: sy
+                real(kind=8) dimension(11346),intent(in) :: xx
+                real(kind=8) dimension(11346),intent(in) :: yy
+            end subroutine avsdcor
+            subroutine sdsmooth(atm,av,sd,rho,iband,nvar,nday,ny,ns,ilpg,leap,idays,miss,nout) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                real(kind=4) dimension(4,31,12,31),intent(in) :: atm
+                real(kind=4) dimension(4,12,31),intent(out) :: av
+                real(kind=4) dimension(4,12,31),intent(out) :: sd
+                real(kind=4) dimension(4,12,31),intent(out) :: rho
+                integer intent(in) :: iband
+                integer intent(in) :: nvar
+                integer dimension(12),intent(in) :: nday
+                integer intent(in) :: ny
+                integer intent(in) :: ns
+                integer intent(in) :: ilpg
+                integer dimension(4),intent(in) :: leap
+                integer dimension(12,4),intent(in) :: idays
+                real(kind=4) intent(in) :: miss
+                integer intent(in) :: nout
+            end subroutine sdsmooth
+            subroutine basic(idata,ave,sd,n) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                real(kind=8) dimension(*),intent(in) :: idata
+                real(kind=4) intent(out) :: ave
+                real(kind=4) intent(out) :: sd
+                integer intent(in) :: n
+            end subroutine basic
+            subroutine avsds(atm,nvar,ny,av,sd,rho,nout) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                real(kind=4) dimension(4,31,12),intent(in) :: atm
+                integer intent(in) :: nvar
+                integer intent(in) :: ny
+                real(kind=4) dimension(4,12),intent(out) :: av
+                real(kind=4) dimension(4,12),intent(out) :: sd
+                real(kind=4) dimension(4,12),intent(out) :: rho
+                integer intent(in) :: nout
+            end subroutine avsds
+            subroutine avsdy(atm,nvar,ny,avy,sdy,rhoy) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                real(kind=4) dimension(4,31),intent(in) :: atm
+                integer intent(in) :: nvar
+                integer intent(in) :: ny
+                real(kind=4) dimension(4),intent(out) :: avy
+                real(kind=4) dimension(4),intent(out) :: sdy
+                real(kind=4) dimension(4),intent(out) :: rhoy
+            end subroutine avsdy
+            subroutine sqroot(sss,nv) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use svd
+                use constants
+                real(kind=4) dimension(4,4),intent(inout) :: sss
+                integer intent(in) :: nv
+            end subroutine sqroot
+            subroutine solve(sss,nv) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use svd
+                use constants
+                real(kind=4) dimension(4,4),intent(inout) :: sss
+                integer intent(in) :: nv
+            end subroutine solve
+            subroutine matmat(a,b,c,n) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                real(kind=4) dimension(4,4),intent(in) :: a
+                real(kind=4) dimension(4,4),intent(in) :: b
+                real(kind=4) dimension(4,4),intent(inout) :: c
+                integer intent(in) :: n
+            end subroutine matmat
+            subroutine matmul(a,b,c,n) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                real(kind=4) dimension(4,4),intent(in) :: a
+                real(kind=4) dimension(4),intent(in) :: b
+                real(kind=4) dimension(4),intent(out) :: c
+                integer intent(in) :: n
+            end subroutine matmul
+            subroutine c_g_corl_daily(atm,cobs,dobs,iband,nvar,nday,ny,ns,ilpg,leap,idays,inx,miss,nout) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                real(kind=4) dimension(4,31,12,31),intent(in) :: atm
+                real(kind=4) dimension(12,31,4,4),intent(out) :: cobs
+                real(kind=4) dimension(12,31,4,4),intent(out) :: dobs
+                integer :: iband
+                integer :: nvar
+                integer dimension(12),intent(in) :: nday
+                integer :: ny
+                integer :: ns
+                integer :: ilpg
+                integer dimension(4),intent(in) :: leap
+                integer dimension(12,4),intent(in) :: idays
+                integer :: inx
+                real(kind=4) :: miss
+                integer :: nout
+            end subroutine c_g_corl_daily
+            subroutine c_g_corl_season(atm,cobs,dobs,nvar,ny,inx,nout) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                real(kind=4) dimension(4,31,12),intent(in) :: atm
+                real(kind=4) dimension(12,4,4),intent(out) :: cobs
+                real(kind=4) dimension(12,4,4),intent(out) :: dobs
+                integer intent(in) :: nvar
+                integer intent(in) :: ny
+                integer intent(in) :: inx
+                integer intent(in) :: nout
+            end subroutine c_g_corl_season
+            subroutine c_g_corl_year(atm,cobs,dobs,nvar,ny,inx) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                use constants
+                real(kind=4) dimension(4,31),intent(in) :: atm
+                real(kind=4) dimension(4,4),intent(out) :: cobs
+                real(kind=4) dimension(4,4),intent(out) :: dobs
+                integer intent(in) :: nvar
+                integer intent(in) :: ny
+                integer intent(in) :: inx
+            end subroutine c_g_corl_year
+        end module mbc_subroutines
+    end interface 
+end python module mrmbc
+
+! This file was auto-generated with f2py (version:1.25.2).
+! See:
+! https://web.archive.org/web/20140822061353/http://cens.ioc.ee/projects/f2py2e
