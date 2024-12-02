@@ -60,14 +60,6 @@ sdmbc\_v2.mrmbc module
    :undoc-members:
    :show-inheritance:
 
-sdmbc\_v2.output\_reformatter1 module
--------------------------------------
-
-.. automodule:: sdmbc_v2.output_reformatter1
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 sdmbc\_v2.reformat\_gcm2origin module
 -------------------------------------
 
@@ -80,6 +72,30 @@ sdmbc\_v2.sdmbc\_bc\_function module
 ------------------------------------
 
 .. automodule:: sdmbc_v2.sdmbc_bc_function
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+sdmbc\_v2.sdmbc\_future\_main module
+------------------------------------
+
+.. automodule:: sdmbc_v2.sdmbc_future_main
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+sdmbc\_v2.sdmbc\_hist\_main module
+----------------------------------
+
+.. automodule:: sdmbc_v2.sdmbc_hist_main
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+sdmbc\_v2.sdmbc\_hist\_main\_3d module
+--------------------------------------
+
+.. automodule:: sdmbc_v2.sdmbc_hist_main_3d
    :members:
    :undoc-members:
    :show-inheritance:

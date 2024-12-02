@@ -23,26 +23,33 @@
 # -----------------------------------------------------------------------------------------------------------------
 
 import glob
+
 # Silence warnings
 import warnings
 
 import cartopy  # type: ignore
+
 # import matplotlib.colors as colors
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
 import cartopy.crs as ccrs  # type: ignore
+
 # Plotting
 import matplotlib.pyplot as plt  # Plotting
+
 # Load pacakges ===================================
 import numpy as np  # Arrays and matrix math
 import pandas as pd
+
 # import pandas as pd  # DataFrames
 import xarray as xr  # Xarray # type: ignore
-from config import config
+
 # from matplotlib.colors import BoundaryNorm
 # from matplotlib.colors import ListedColormap
 # from matplotlib.cm import get_cmap
 from matplotlib.offsetbox import AnchoredText
 from scipy.stats import ks_2samp
+
+from config import config
 
 # from mpl_toolkits.basemap import Basemap
 # from mpl_toolkits.basemap import cm
@@ -759,7 +766,9 @@ def figure_surface(
     # File paths
     gcm_sst_pattern = sorted(glob.glob(f"{obs_path}/tos_Oday_*_remapped.nc"))
     obs_sst_pattern = sorted(glob.glob(f"{obs_path}/tos_reanalysis_to_*.nc"))
-    bcd_sst_file = f"{out_path}/bc_corrected_2d_Oday_*_{startyear}_{endyear}.nc"
+    bcd_sst_file = sorted(
+        glob.glob(f"{out_path}/bc_corrected_2d_Oday_*_{startyear}_{endyear}.nc")
+    )
 
     # Load datasets
     dgcm_sst = xr.open_mfdataset(gcm_sst_pattern, combine="by_coords").sel(
@@ -813,6 +822,8 @@ def figure_surface(
     # print(g_sst)
     # Save contour plot of SST
     save_figure_surface(g_sst, d_sst, e_sst, out_figure_path)
+
+
 # functions for sst end ---------------------------------------------
 
 # functions for ks-test ---------------------------------------------

@@ -28,11 +28,11 @@ import pandas as pd
 # 2023-04-17
 # =======================================================================================
 import xarray as xr  # type: ignore
-from config import config
 from scipy.stats import ks_2samp
 
-from sdmbc_v2.data_preparation import load_config
-from sdmbc_v2.figurefunction import (
+from config import config
+from data_preparation import load_config
+from figurefunction import (
     assign_w,
     calculate_ks_matrix,
     rounder,

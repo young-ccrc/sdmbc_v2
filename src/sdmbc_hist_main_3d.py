@@ -10,18 +10,16 @@ import numpy as np  # type: ignore
 
 # import pandas as pd # type: ignore
 import xarray as xr  # type: ignore
-from config import config  # type: ignore
 from dask.distributed import Client  # type: ignore
 from tqdm import tqdm  # type: ignore
 
 # import yaml  # type: ignore
-from sdmbc_v2.bc_grid_function import (
-    preprocess_and_save_obs,  # type: ignore
-    process_tile,
-)
+from bc_grid_function import preprocess_and_save_obs  # type: ignore
+from bc_grid_function import process_tile
+from config import config  # type: ignore
 
 # from data_preparation import   # type: ignore
-from sdmbc_v2.data_preparation import (
+from data_preparation import (
     assign_w_day,
     generate_file_paths,
     generate_file_paths_obs,
@@ -188,7 +186,7 @@ def main(config):
     n_lat_tiles = 10
     n_lon_tiles = 10
 
-    temp_dir = os.path.join(out_path, "temp_tiles")
+    temp_dir = os.path.join(out_path, "temp_tiles_slevel_elevel")
     os.makedirs(temp_dir, exist_ok=True)
 
     print("start dask bc correction")
@@ -352,11 +350,17 @@ def main(config):
 
         for var_name, lower, upper in zip(variables_to_limit, lower_limit, upper_limit):
             if var_name in full_bc_corrected:
+                if var_name == "hus":
+                    lower = lower / 1000
+                    upper = upper / 1000
                 # Apply the limits to the variable by masking values outside of the range
                 full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
-                    (full_bc_corrected[var_name] >= lower)
-                    & (full_bc_corrected[var_name] <= upper),
-                    np.nan,
+                    (full_bc_corrected[var_name] > lower),
+                    lower,
+                )
+                full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
+                    (full_bc_corrected[var_name] < upper),
+                    upper,
                 )
 
         full_bc_corrected["time"].attrs.update(
@@ -391,7 +395,6 @@ def main(config):
             if bc_boundary == "lateral":
                 full_bc_corrected[var].attrs.update(
                     {
-                        "coordinates": "time lev lat lon",
                         "description": f"bias-corrected data, {m_names[int(config.correction_model)-1]}, SDMBCv2",
                         "history": "Created by applying SDMBCv2 package",
                     }
@@ -399,7 +402,6 @@ def main(config):
             else:
                 full_bc_corrected[var].attrs.update(
                     {
-                        "coordinates": "time lat lon",
                         "description": f"bias-corrected data, {m_names[int(config.correction_model)-1]}, SDMBCv2",
                         "history": "Created by applying SDMBCv2 package",
                     }
@@ -438,8 +440,8 @@ def main(config):
                 )
 
         # Remove the temporary directory and its contents
-        # shutil.rmtree(temp_dir)
-        # print("Intermediate files deleted.")
+        shutil.rmtree(temp_dir)
+        print("Intermediate files deleted.")
 
         # Log the time taken for this level
         end_time = time.time()
@@ -474,47 +476,6 @@ def main(config):
                     )
                 statistics.figure_atmos()
                 print("Finish 3d field")
-
-            else:
-                statistics.figure_surface()
-                print("Finish 2d field")
-
-    # if config.reformat_to_original:
-    #     print("Start reformatting")
-    #     if bc_boundary == "lateral":
-    #         reformat_and_save_3d(
-    #             out_path,
-    #             tlevel,
-    #             startyear_h,
-    #             endyear_h,
-    #             variables,
-    #             variables,
-    #             out_path,
-    #             infor,
-    #             gname,
-    #             period,
-    #             cinfor,
-    #             sinfor,
-    #         )
-    #         print("Finish 3D reformatting")
-
-    #     else:
-    #         reformat_and_save_2d(
-    #             out_path,
-    #             startyear_h,
-    #             endyear_h,
-    #             variables,
-    #             variables,
-    #             out_path,
-    #             infor,
-    #             gname,
-    #             period,
-    #             cinfor,
-    #             sinfor,
-    #             startyear_h,
-    #             endyear_h,
-    #         )
-    #         print("Finish 2D reformatting")
 
 
 if __name__ == "__main__":

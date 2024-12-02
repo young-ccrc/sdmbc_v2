@@ -10,18 +10,18 @@ import numpy as np  # type: ignore
 
 # import pandas as pd # type: ignore
 import xarray as xr  # type: ignore
-from config import config  # type: ignore
 from dask.distributed import Client  # type: ignore
 from tqdm import tqdm  # type: ignore
 
 # import yaml  # type: ignore
-from sdmbc_v2.bc_grid_function import (  # type: ignore
+from bc_grid_function import (  # type: ignore
     bc_correction_grid_cell_hist_dask,
     bc_correction_grid_cell_hist_dask_2d,
 )
+from config import config  # type: ignore
 
 # from data_preparation import   # type: ignore
-from sdmbc_v2.data_preparation import (
+from data_preparation import (
     assign_w_6hr,
     convert_to_daily_with_fraction,
     extract_and_reshape_delayed,

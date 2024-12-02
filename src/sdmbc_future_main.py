@@ -3,30 +3,31 @@ import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor
 
-sys.path.append("/g/data/w28/yk8692/sdmbc_v2/sdmbc_v2")
-
 # import dask  # type: ignore
 import numpy as np  # type: ignore
 
 # import pandas as pd # type: ignore
 import xarray as xr  # type: ignore
-from config import config  # type: ignore
 from dask.distributed import Client  # type: ignore
 
 # import yaml  # type: ignore
-from sdmbc_v2.bc_grid_function import (  # type: ignore
+from bc_grid_function import (  # type: ignore
     apply_moving_window_bias_correction,
     bc_correction_grid_cell_hist_dask,
 )
-from sdmbc_v2.data_preparation import (
+from config import config  # type: ignore
+from data_preparation import (
     assign_w_6hr,
     convert_to_daily_with_fraction,
     extract_and_reshape_delayed,
     load_and_combine_variables,
     validate_inputs,
 )
-from sdmbc_v2.reformat_gcm2origin import reformat_and_save_2d  # type: ignore
-from sdmbc_v2.reformat_gcm2origin import reformat_and_save_3d  # type: ignore
+from reformat_gcm2origin import reformat_and_save_2d  # type: ignore
+from reformat_gcm2origin import reformat_and_save_3d  # type: ignore
+
+# sys.path.append("/g/data/w28/yk8692/sdmbc_v2/sdmbc_v2")
+
 
 warnings.simplefilter("ignore", UserWarning)
 

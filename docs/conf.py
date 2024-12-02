@@ -4,9 +4,7 @@ from unittest.mock import MagicMock
 
 import sphinx_rtd_theme
 
-sys.path.insert(
-    sys.path.insert(0, os.path.abspath("../sdmbc_v2"))
-)  # Adds the root project folder to sys.path
+sys.path.insert(0, os.path.abspath(".."))
 
 # Configuration file for the Sphinx documentation builder.
 # For the full list of built-in configuration values, see the documentation:

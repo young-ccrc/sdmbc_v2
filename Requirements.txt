@@ -1,0 +1,9 @@
+numpy
+dask
+xarray
+pandas
+pyyaml
+tqdm
+matplotlib
+scipy
+cartopy

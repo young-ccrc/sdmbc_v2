@@ -39,10 +39,10 @@ from functools import partial
 import pandas as pd  # type: ignore
 import xarray as xr  # type: ignore
 from cdo import Cdo  # type: ignore
-from config import config
 from dask.distributed import Client  # type: ignore
 
-from sdmbc_v2.interpolation import regrid
+from config import config
+from interpolation import regrid
 
 cdo = Cdo()
 # Load pacakges end ================================
@@ -339,7 +339,7 @@ def reformat_and_save_3d(
 
     # Load bias-corrected data
     list_3D = [
-        sorted(glob.glob(os.path.join(bc_path, f"bc_corrected_3d_level_{idx}_*.nc")))
+        sorted(glob.glob(os.path.join(bc_path, f"bc_corrected_3d_lev_{idx}_*.nc")))
         for idx in range(0, tlevel + 1)
     ]
     ifile_3D = ["".join(list_3D[i]) for i in range(tlevel)]
@@ -502,7 +502,12 @@ def main(config):
             )
         )
         input_files = sorted(
-            glob.glob(os.path.join(out_path, f"bc_corrected_2d_*_{startyear_h}*.nc"))
+            glob.glob(
+                os.path.join(
+                    out_path,
+                    f"bc_corrected_2d_{config.infor}_{config.gname}_{config.period}_{config.cinfor}_{config.sinfor}_{startyear_h}_{endyear_h}.nc",
+                )
+            )
         )
         # obs_files = sorted(glob.glob(f"{config.obs_path}/{config.target_variable_sst[0]}_*.nc"))
         remap_weights_file = f"{out_path}/remap_weights_{target_variable[0]}_{startyear_h}_{endyear_h}.nc"

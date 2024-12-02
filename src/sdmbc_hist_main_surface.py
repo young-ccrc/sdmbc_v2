@@ -35,25 +35,23 @@ import numpy as np  # type: ignore
 
 # import pandas as pd # type: ignore
 import xarray as xr  # type: ignore
-from config import config  # type: ignore
 from dask.distributed import Client  # type: ignore
 from tqdm import tqdm  # type: ignore
 
 # import yaml  # type: ignore
-from sdmbc_v2.bc_grid_function import (
-    bc_correction_grid_cell_hist_dask_2d,
-)  # type: ignore
+from bc_grid_function import bc_correction_grid_cell_hist_dask_2d  # type: ignore
+from config import config  # type: ignore
 
 # from data_preparation import   # type: ignore
-from sdmbc_v2.data_preparation import (
+from data_preparation import (
     extract_and_reshape_delayed,
     generate_file_paths,
     generate_file_paths_obs,
     load_preprocess_variable,
     validate_inputs,
 )
-from sdmbc_v2.figurefunction import figure_surface  # type: ignore
-from sdmbc_v2.figurefunction import save_figure_surface
+from figurefunction import figure_surface  # type: ignore
+from figurefunction import save_figure_surface
 
 # from analysis_plot import AnalysisBC  # type: ignore
 
@@ -263,8 +261,8 @@ def main(config):
         )
         # Add the processed variable to the dataset
         sliced_gcm[var_name] = data_var
-        # Chunk the data
-        sliced_gcm = sliced_gcm.chunk({"time": 1000, "lat": -1, "lon": -1})
+    # Chunk the data
+    sliced_gcm = sliced_gcm.chunk({"time": 1000, "lat": -1, "lon": -1})
     sliced_gcm_all.append(sliced_gcm)
     daily_gcm = sliced_gcm_all[0]
     reshaped_gcm_delayed = extract_and_reshape_delayed(
@@ -301,7 +299,7 @@ def main(config):
     # =============== Load obs end ===============
 
     # Create a temporary folder for saving intermediate files
-    temp_dir = os.path.join(out_path, "temp_tiles")
+    temp_dir = os.path.join(out_path, "temp_tiles_surface")
     os.makedirs(temp_dir, exist_ok=True)
 
     print("start dask bc correction")
@@ -463,7 +461,6 @@ def main(config):
     for var in full_bc_corrected.data_vars:
         full_bc_corrected[var].attrs.update(
             {
-                "coordinates": "time lat lon",
                 "description": f"bias-corrected data, {m_names[int(config.correction_model)-1]}, SDMBCv2",
                 "history": "Created by applying SDMBCv2 package",
             }
@@ -510,25 +507,21 @@ def main(config):
     if config.reformat_to_original:
         print("Start reformatting")
         # Dynamically construct the module folder path relative to the main script
-        module_folder = os.path.join(os.path.dirname(__file__), "modules")
+        # module_folder = os.path.join(os.path.dirname(__file__), "modules")
         module_name = (
             "reformat_gcm2origin"  # The Python file name without the .py extension
         )
 
-        # Check the condition
-        if config.reformat_to_original:
-            print("Start reformatting")
+        # Add the module folder to sys.path if it's not already there
+        # if module_folder not in os.sys.path:
+        #     os.sys.path.append(module_folder)
 
-            # Add the module folder to sys.path if it's not already there
-            if module_folder not in os.sys.path:
-                os.sys.path.append(module_folder)
-
-            # Import the module dynamically and run
-            try:
-                reformat_module = importlib.import_module(module_name)
-                reformat_module.main()  # Assuming the .py file has a main() function
-            except Exception as e:
-                print(f"Failed to run the module '{module_name}': {e}")
+        # Import the module dynamically and run
+        try:
+            reformat_module = importlib.import_module(module_name)
+            reformat_module.main()  # Assuming the .py file has a main() function
+        except Exception as e:
+            print(f"Failed to run the module '{module_name}': {e}")
 
 
 if __name__ == "__main__":
