@@ -23,6 +23,8 @@
 # -----------------------------------------------------------------------------------------------------------------
 
 import glob
+import os
+import shutil
 
 # Silence warnings
 import warnings
@@ -32,6 +34,7 @@ import cartopy  # type: ignore
 # import matplotlib.colors as colors
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
 import cartopy.crs as ccrs  # type: ignore
+import cartopy.feature as cfeature
 
 # Plotting
 import matplotlib.pyplot as plt  # Plotting
@@ -50,6 +53,13 @@ from matplotlib.offsetbox import AnchoredText
 from scipy.stats import ks_2samp
 
 from config import config
+from data_preparation import (
+    assign_w_6hr,
+    convert_to_daily_with_fraction,
+    generate_file_paths,
+    generate_file_paths_obs,
+    load_preprocess_variable,
+)
 
 # from mpl_toolkits.basemap import Basemap
 # from mpl_toolkits.basemap import cm
@@ -62,6 +72,29 @@ warnings.simplefilter("ignore")
 
 # Functions for main_figure =========================================
 # functions for 3D --------------------------------------------------
+
+startyear_h = config.startyear_h
+endyear_h = config.endyear_h
+no_of_variables = config.no_of_variables
+startyear_h = config.startyear_h
+bc_boundary = config.bc_boundary
+bc_hist_path = config.bc_hist_path
+lat_max = config.lat_max
+lat_min = config.lat_min
+lon_max = config.lon_max
+lon_min = config.lon_min
+tlevel = config.tlevel
+obs_path = config.obs_path
+out_path = config.out_path
+input_model = config.input_model
+infor = config.infor
+gname = config.gname
+period = config.period
+cinfor = config.cinfor
+sinfor = config.sinfor
+version = config.version
+variables = config.target_variable
+out_figure_path = config.out_figure_path
 
 
 # Set variable hus, ta, and w
@@ -85,10 +118,8 @@ def cal_mean(ds):
 
     """
     dsd = ds.groupby("time.dayofyear").mean("time").mean("dayofyear")
-    dsm = ds.groupby("time.month").mean("time").mean("month")
-    dss = ds.groupby("time.season").mean("time").mean("season")
-    dsy = ds.groupby("time.year").mean("time").mean("year")
-    return dsd, dsm, dss, dsy
+
+    return dsd
 
 
 # Standard deviation
@@ -98,10 +129,8 @@ def cal_std(ds):
 
     """
     dsd = ds.std("time")
-    dsm = ds.resample(time="ME").mean("time").std("time")
-    dss = ds.resample(time="QS-DEC").mean("time").std("time")
-    dsy = ds.resample(time="YE").mean("time").std("time")
-    return dsd, dsm, dss, dsy
+
+    return dsd
 
 
 # Lag1 auto-correlation
@@ -272,220 +301,545 @@ def scatter_dot(ax, ds, de, markers, alpha, label, sz, v):
     )
 
 
-# Scatter plot of 3d atmospheric variables
-def save_figure_3d(g_day, d_day, e_day, out_figure_path):
+# Function to adjust longitude from 0-360 to -180 to 180
+def adjust_longitude(ds):
+    ds = ds.copy()  # Create a copy of the dataset to avoid modifying the original
+    ds["lon"] = ((ds["lon"] + 180) % 360) - 180
+    return ds.sortby("lon")
+
+
+# Function to plot bias maps for multiple variables in a grid layout
+def plot_bias_grid(
+    data_gcm,
+    data_mbc,
+    data_era5,
+    variables,
+    statistic,
+    title_prefix,
+    cmap="RdBu_r",
+    variable_limits=None,
+    central_longitude=180,
+):
     """
-    Save the scatter plots for three dimensional atmospheric variables
-    including mean, standard deviation, lag1 auto-correlation.
-    g_day: an array containing data from the raw GCM data
-    d_day: an array containing data from the bias-corrected GCM data
-    e_day: an array containing data from the observed data
-    out_figure_path: a string representing the path where the output figure will be saved
+    Plot bias maps for multiple variables in a 3-row x 2-column grid layout.
 
+    Parameters:
+    data_gcm (xarray.Dataset): GCM dataset to plot.
+    data_mbc (xarray.Dataset): MBC bias-corrected dataset to plot.
+    data_era5 (xarray.Dataset): Reference ERA5 dataset.
+    variables (list): List of variables to plot.
+    title_prefix (str): Prefix for the plot titles.
+    cmap (str): Colormap to use (default is 'RdBu_r').
+    variable_limits (dict): Dictionary containing vmin and vmax for each variable.
+    central_longitude (float): The central longitude for the map projection.
     """
-    # generate a list of markers and another of colors
-    variable = ["q", "t", "w"]
-    markers = ["s", "+", "^", "o"]
-    colors = ["b", "g", "c", "r"]
-    label = ["Day", "Month", "Season", "Year"]
-    alpha = 0.7
-    sz = 15
-    limitlist = [-0.4, 1.0]
-
-    print("Calculate statistics for 3D")
-    # calculate mean over whole periods
-    d_d, d_m, d_s, d_y = cal_mean(d_day)
-    e_d, e_m, e_s, e_y = cal_mean(e_day)
-    g_d, g_m, g_s, g_y = cal_mean(g_day)
-    # calculate std over whole periods
-    d_ds, d_ms, d_ss, d_ys = cal_std(d_day)
-    e_ds, e_ms, e_ss, e_ys = cal_std(e_day)
-    g_ds, g_ms, g_ss, g_ys = cal_std(g_day)
-
-    # calculate auto-corr over whole periods
-    d_da, d_ma, d_sa, d_ya = (
-        cal_acor(d_day, "D", variable),
-        cal_acor(d_day, "M", variable),
-        cal_acor(d_day, "QS-DEC", variable),
-        cal_acor(d_day, "Y", variable),
-    )
-    e_da, e_ma, e_sa, e_ya = (
-        cal_acor(e_day, "D", variable),
-        cal_acor(e_day, "M", variable),
-        cal_acor(e_day, "QS-DEC", variable),
-        cal_acor(e_day, "Y", variable),
-    )
-    g_da, g_ma, g_sa, g_ya = (
-        cal_acor(g_day, "D", variable),
-        cal_acor(g_day, "M", variable),
-        cal_acor(g_day, "QS-DEC", variable),
-        cal_acor(g_day, "Y", variable),
+    # Adjust longitude for all datasets
+    data_gcm = adjust_longitude(data_gcm)
+    data_mbc = adjust_longitude(data_mbc)
+    data_era5 = adjust_longitude(data_era5)
+    units = ["m/s", "K", "g/kg"]
+    # Set up the figure with 3 rows and 2 columns
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=2,
+        figsize=(20, 15),
+        subplot_kw={
+            "projection": ccrs.PlateCarree(central_longitude=central_longitude)
+        },
     )
 
-    no_of_variables = len(variable)
-    limlist = [-1.0, 1.0]
-
-    # list  variables
-    g_m_list = [g / 4 for g in [g_d, g_m, g_s, g_y]]
-    g_sd_list = [g / 4 for g in [g_ds, g_ms, g_ss, g_ys]]
-    g_auto_list = [g_da, g_ma, g_sa, g_ya]
-
-    e_m_list = [e / 4 for e in [e_d, e_m, e_s, e_y]]
-    e_sd_list = [e / 4 for e in [e_ds, e_ms, e_ss, e_ys]]
-    e_auto_list = [e_da, e_ma, e_sa, e_ya]
-
-    d_m_list = [d / 4 for d in [d_d, d_m, d_s, d_y]]
-    d_sd_list = [d / 4 for d in [d_ds, d_ms, d_ss, d_ys]]
-    d_auto_list = [d_da, d_ma, d_sa, d_ya]
-
-    print("Save figures")
-
-    for j in range(0, no_of_variables):
-        fig = plt.figure(figsize=(18, 10))
-        for i in range(1, 7):
-            ax = fig.add_subplot(2, 3, i)
-            if i == 1:
-                scatter_mean(
-                    ax, g_m_list, e_m_list, markers, alpha, label, sz, variable[j]
-                )
-                ax.legend()
-                plt.ylabel("GCM", fontsize=18)
-                plt.title("Mean", fontsize=20)
-            elif i == 2:
-                scatter_sd(
-                    ax, g_sd_list, e_sd_list, markers, alpha, label, sz, variable[j]
-                )
-                plt.title("Standard Deviation", fontsize=20)
-            elif i == 3:
-                scatter_auto(
-                    ax,
-                    g_auto_list,
-                    e_auto_list,
-                    markers,
-                    alpha,
-                    label,
-                    sz,
-                    j,
-                    limitlist,
-                )
-                plt.title("LAG1 correlation", fontsize=20)
-            elif i == 4:
-                scatter_mean(
-                    ax, d_m_list, d_m_list, markers, alpha, label, sz, variable[j]
-                )
-                plt.ylabel("Bias-corrected GCM", fontsize=18)
-                plt.xlabel("Obs", fontsize=18)
-            elif i == 5:
-                scatter_sd(
-                    ax, d_sd_list, d_sd_list, markers, alpha, label, sz, variable[j]
-                )
-                plt.xlabel("Obs", fontsize=18)
-            elif i == 6:
-                scatter_auto(
-                    ax,
-                    d_auto_list,
-                    e_auto_list,
-                    markers,
-                    alpha,
-                    label,
-                    sz,
-                    j,
-                    limitlist,
-                )
-                plt.xlabel("Obs", fontsize=18)
-
-        fig.tight_layout()
-        var_surface = "RCM"
-        f_surface_name = "input.statistics"
-        plt.savefig(
-            f"{out_figure_path}{var_surface}.{f_surface_name}.{variable[j]}.png",
-            dpi=100,
-            bbox_inches="tight",
+    for i, var in enumerate(variables):
+        # GCM Bias vs ERA5
+        ax_gcm = axes[i, 0]
+        bias_gcm = data_gcm[var] - data_era5[var]
+        vmin, vmax = variable_limits[var]["vmin"], variable_limits[var]["vmax"]
+        bias_plot_gcm = ax_gcm.pcolormesh(
+            bias_gcm["lon"],
+            bias_gcm["lat"],
+            bias_gcm,
+            cmap=cmap,
+            transform=ccrs.PlateCarree(),
+            shading="auto",
+            vmin=vmin,
+            vmax=vmax,
         )
+        ax_gcm.coastlines(resolution="50m", linewidth=1)
+        ax_gcm.add_feature(cfeature.BORDERS, linestyle=":")
+        ax_gcm.add_feature(cfeature.LAND, edgecolor="black", zorder=-1, alpha=0.3)
+        ax_gcm.add_feature(cfeature.OCEAN, zorder=-1, alpha=0.3)
+        ax_gcm.set_title(f"{title_prefix} GCM - ERA5, {var}", fontsize=12)
+        cbar = fig.colorbar(
+            bias_plot_gcm,
+            ax=ax_gcm,
+            orientation="horizontal",
+            pad=0.05,
+            extend="both",
+            shrink=0.67,
+            aspect=25,
+        )  # Adjusted colorbar size
+        cbar.set_label(f"{var} ({units[i]})")
 
+        # MBC Bias vs ERA5
+        ax_mbc = axes[i, 1]
+        bias_mbc = data_mbc[var] - data_era5[var]
+        bias_plot_mbc = ax_mbc.pcolormesh(
+            bias_mbc["lon"],
+            bias_mbc["lat"],
+            bias_mbc,
+            cmap=cmap,
+            transform=ccrs.PlateCarree(),
+            shading="auto",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax_mbc.coastlines(resolution="50m", linewidth=1)
+        ax_mbc.add_feature(cfeature.BORDERS, linestyle=":")
+        ax_mbc.add_feature(cfeature.LAND, edgecolor="black", zorder=-1, alpha=0.3)
+        ax_mbc.add_feature(cfeature.OCEAN, zorder=-1, alpha=0.3)
+        ax_mbc.set_title(f"{title_prefix} BC - ERA5, {var}", fontsize=12)
+        cbar = fig.colorbar(
+            bias_plot_mbc,
+            ax=ax_mbc,
+            orientation="horizontal",
+            pad=0.05,
+            extend="both",
+            shrink=0.67,
+            aspect=25,
+        )  # Adjusted colorbar size
+        cbar.set_label(f"{var} ({units[i]})")
 
-# Scatter plot of 3d cross-correlation
-def save_figure_3d_cross(g_day, d_day, e_day, out_figure_path):
-    """
-    Save the scatter plots for three dimensional atmospheric variables
-    including lag0 cross-correlation.
-    g_day: an array containing data from the raw GCM data
-    d_day: an array containing data from the bias-corrected GCM data
-    e_day: an array containing data from the observed data
-    out_figure_path: a string representing the path where the output figure will be saved
-
-    """
-    # generate a list of markers and another of colors
-    # generate a list of markers and another of colors
-    variable = ["q", "t", "w"]
-    markers = ["s", "+", "^", "o"]
-    colors = ["black", "skyblue", "lightcoral", "silver"]
-    cc = "viridis"
-    label = ["Day", "Month", "Season", "Year"]
-    alpha = 0.7
-    sz = 15
-
-    print("Calculate cross-correlation for 3D")
-    # calculate cross-corr over whole periods
-    d_dc, d_mc, d_sc, d_yc = (
-        cal_ccor(d_day, "D", variable),
-        cal_ccor(d_day, "M", variable),
-        cal_ccor(d_day, "QS-DEC", variable),
-        cal_ccor(d_day, "Y", variable),
-    )
-    e_dc, e_mc, e_sc, e_yc = (
-        cal_ccor(e_day, "D", variable),
-        cal_ccor(e_day, "M", variable),
-        cal_ccor(e_day, "QS-DEC", variable),
-        cal_ccor(e_day, "Y", variable),
-    )
-    g_dc, g_mc, g_sc, g_yc = (
-        cal_ccor(g_day, "D", variable),
-        cal_ccor(g_day, "M", variable),
-        cal_ccor(g_day, "QS-DEC", variable),
-        cal_ccor(g_day, "Y", variable),
-    )
-
-    # list  variables
-    g_c_list = [g_dc, g_mc, g_sc, g_yc]
-    e_c_list = [e_dc, e_mc, e_sc, e_yc]
-    d_c_list = [d_dc, d_mc, d_sc, d_yc]
-
-    # Cross-correlation titles
-    ctitle = ["q & T", "q & w", "T & w"]
-    print("Save figures")
-
-    fig = plt.figure(figsize=(18, 10))
-    for i in range(1, 7):
-        ax = fig.add_subplot(2, 3, i)
-        if i < 4:
-            scatter_dot(ax, g_c_list, e_c_list, markers, alpha, label, sz, i - 1)
-            plt.title(ctitle[i - 1], fontsize=20)
-            plt.xticks([])
-            if i > 1:
-                plt.yticks([])
-            if i == 1:
-                plt.ylabel("GCM", fontsize=18)
-                ax.legend()
-        elif i > 3 and i < 7:
-            scatter_dot(ax, d_c_list, e_c_list, markers, alpha, label, sz, i - 4)
-            plt.xticks([])
-            if i > 4:
-                plt.yticks([])
-            if i == 4:
-                plt.ylabel("Bias-corrected GCM", fontsize=18)
-                plt.xlabel("Obs", fontsize=18)
-    fig.tight_layout()
-    var_surface = "RCM"
-    f_surface_name = "input.statistics"
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+    plt.show()
     plt.savefig(
-        f"{out_figure_path}{var_surface}.{f_surface_name}.cross_correlation.png",
-        dpi=100,
+        f"{out_figure_path}/sdmbc_{statistic}_{startyear_h}_{endyear_h}.png",
+        dpi=300,
         bbox_inches="tight",
     )
 
 
-# functions for 3D end ----------------------------------------------
+# Function to plot bias maps for multiple variables in a grid layout
+def plot_bias_grid_auto(
+    data_gcm,
+    data_mbc,
+    data_era5,
+    ref,
+    variables,
+    statistic,
+    title_prefix,
+    cmap="RdBu_r",
+    variable_limits=None,
+    central_longitude=180,
+):
+    """
+    Plot bias maps for multiple variables in a 3-row x 2-column grid layout.
+
+    Parameters:
+    data_gcm (xarray.Dataset): GCM dataset to plot.
+    data_mbc (xarray.Dataset): MBC bias-corrected dataset to plot.
+    data_era5 (xarray.Dataset): Reference ERA5 dataset.
+    variables (list): List of variables to plot.
+    title_prefix (str): Prefix for the plot titles.
+    cmap (str): Colormap to use (default is 'RdBu_r').
+    variable_limits (dict): Dictionary containing vmin and vmax for each variable.
+    central_longitude (float): The central longitude for the map projection.
+    """
+    # Adjust longitude for all datasets
+    ref = adjust_longitude(ref)
+    # Set up the figure with 3 rows and 2 columns
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=2,
+        figsize=(20, 15),
+        subplot_kw={
+            "projection": ccrs.PlateCarree(central_longitude=central_longitude)
+        },
+    )
+
+    for i, var in enumerate(variables):
+        # GCM Bias vs ERA5
+        ax_gcm = axes[i, 0]
+        bias_gcm = data_gcm[i] - data_era5[i]
+        vmin, vmax = variable_limits[var]["vmin"], variable_limits[var]["vmax"]
+        bias_plot_gcm = ax_gcm.pcolormesh(
+            ref["lon"],
+            ref["lat"],
+            bias_gcm,
+            cmap=cmap,
+            transform=ccrs.PlateCarree(),
+            shading="auto",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax_gcm.coastlines(resolution="50m", linewidth=1)
+        ax_gcm.add_feature(cfeature.BORDERS, linestyle=":")
+        ax_gcm.add_feature(cfeature.LAND, edgecolor="black", zorder=-1, alpha=0.3)
+        ax_gcm.add_feature(cfeature.OCEAN, zorder=-1, alpha=0.3)
+        ax_gcm.set_title(f"{title_prefix} GCM - ERA5, {var}", fontsize=12)
+        cbar = fig.colorbar(
+            bias_plot_gcm,
+            ax=ax_gcm,
+            orientation="horizontal",
+            pad=0.05,
+            extend="both",
+            shrink=0.67,
+            aspect=25,
+        )  # Adjusted colorbar size
+        cbar.set_label(f"{var}")
+
+        # MBC Bias vs ERA5
+        ax_mbc = axes[i, 1]
+        bias_mbc = data_mbc[i] - data_era5[i]
+        vmin, vmax = variable_limits[var]["vmin"], variable_limits[var]["vmax"]
+        bias_plot_mbc = ax_mbc.pcolormesh(
+            ref["lon"],
+            ref["lat"],
+            bias_mbc,
+            cmap=cmap,
+            transform=ccrs.PlateCarree(),
+            shading="auto",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax_mbc.coastlines(resolution="50m", linewidth=1)
+        ax_mbc.add_feature(cfeature.BORDERS, linestyle=":")
+        ax_mbc.add_feature(cfeature.LAND, edgecolor="black", zorder=-1, alpha=0.3)
+        ax_mbc.add_feature(cfeature.OCEAN, zorder=-1, alpha=0.3)
+        ax_mbc.set_title(f"{title_prefix} BC - ERA5, {var}", fontsize=12)
+        cbar = fig.colorbar(
+            bias_plot_mbc,
+            ax=ax_mbc,
+            orientation="horizontal",
+            pad=0.05,
+            extend="both",
+            shrink=0.67,
+            aspect=25,
+        )  # Adjusted colorbar size
+        cbar.set_label(f"{var}")
+
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(
+        f"{out_figure_path}/sdmbc_{statistic}_{startyear_h}_{endyear_h}.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+
+
+# Function to plot bias maps for multiple variables in a grid layout
+def plot_bias_grid_cross(
+    data_gcm,
+    data_mbc,
+    data_era5,
+    ref,
+    variables,
+    statistic,
+    title_prefix,
+    cmap="RdBu_r",
+    variable_limits=None,
+    central_longitude=180,
+):
+    """
+    Plot bias maps for multiple variables in a 3-row x 2-column grid layout.
+
+    Parameters:
+    data_gcm (xarray.Dataset): GCM dataset to plot.
+    data_mbc (xarray.Dataset): MBC bias-corrected dataset to plot.
+    data_era5 (xarray.Dataset): Reference ERA5 dataset.
+    variables (list): List of variables to plot.
+    title_prefix (str): Prefix for the plot titles.
+    cmap (str): Colormap to use (default is 'RdBu_r').
+    variable_limits (dict): Dictionary containing vmin and vmax for each variable.
+    central_longitude (float): The central longitude for the map projection.
+    """
+    # Adjust longitude for all datasets
+    ref = adjust_longitude(ref)
+    ctitle = ["w & T", "w & q", "T & q"]
+    # Set up the figure with 3 rows and 2 columns
+    fig, axes = plt.subplots(
+        nrows=3,
+        ncols=2,
+        figsize=(20, 15),
+        subplot_kw={
+            "projection": ccrs.PlateCarree(central_longitude=central_longitude)
+        },
+    )
+
+    for i, var in enumerate(variables):
+        # GCM Bias vs ERA5
+        ax_gcm = axes[i, 0]
+        bias_gcm = data_gcm[i] - data_era5[i]
+        vmin, vmax = variable_limits[var]["vmin"], variable_limits[var]["vmax"]
+        bias_plot_gcm = ax_gcm.pcolormesh(
+            ref["lon"],
+            ref["lat"],
+            bias_gcm,
+            cmap=cmap,
+            transform=ccrs.PlateCarree(),
+            shading="auto",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax_gcm.coastlines(resolution="50m", linewidth=1)
+        ax_gcm.add_feature(cfeature.BORDERS, linestyle=":")
+        ax_gcm.add_feature(cfeature.LAND, edgecolor="black", zorder=-1, alpha=0.3)
+        ax_gcm.add_feature(cfeature.OCEAN, zorder=-1, alpha=0.3)
+        ax_gcm.set_title(f"{title_prefix} GCM - ERA5, {ctitle[i]}", fontsize=12)
+        cbar = fig.colorbar(
+            bias_plot_gcm,
+            ax=ax_gcm,
+            orientation="horizontal",
+            pad=0.05,
+            extend="both",
+            shrink=0.67,
+            aspect=25,
+        )  # Adjusted colorbar size
+        cbar.set_label(f"{var}")
+
+        # MBC Bias vs ERA5
+        ax_mbc = axes[i, 1]
+        bias_mbc = data_mbc[i] - data_era5[i]
+        vmin, vmax = variable_limits[var]["vmin"], variable_limits[var]["vmax"]
+        bias_plot_mbc = ax_mbc.pcolormesh(
+            ref["lon"],
+            ref["lat"],
+            bias_mbc,
+            cmap=cmap,
+            transform=ccrs.PlateCarree(),
+            shading="auto",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax_mbc.coastlines(resolution="50m", linewidth=1)
+        ax_mbc.add_feature(cfeature.BORDERS, linestyle=":")
+        ax_mbc.add_feature(cfeature.LAND, edgecolor="black", zorder=-1, alpha=0.3)
+        ax_mbc.add_feature(cfeature.OCEAN, zorder=-1, alpha=0.3)
+        ax_mbc.set_title(f"{title_prefix} BC - ERA5, {ctitle[i]}", fontsize=12)
+        cbar = fig.colorbar(
+            bias_plot_mbc,
+            ax=ax_mbc,
+            orientation="horizontal",
+            pad=0.05,
+            extend="both",
+            shrink=0.67,
+            aspect=25,
+        )  # Adjusted colorbar size
+        cbar.set_label(f"{var}")
+
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(
+        f"{out_figure_path}/sdmbc_{statistic}_{startyear_h}_{endyear_h}.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+
+
+# Scatter plot of 3d atmospheric variables
+def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
+    lat_range = (lat_min, lat_max)
+    lon_range = (lon_min, lon_max)
+    level = 0
+    # Create a temporary folder for saving intermediate files
+    temp_dir = os.path.join(config.out_figure_path, "temp_figure")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # =============== Load GCM ===============
+    sliced_gcm = xr.Dataset()
+    for var_name, file_paths in file_paths_by_variable_gcm.items():
+        data_var = load_preprocess_variable(
+            file_paths,
+            var_name,
+            level,
+            lat_range,
+            lon_range,
+            config.startyear_h,
+            config.endyear_h,
+        )
+        data_var = data_var.astype("float32")
+        # Check if the variable is one of the wind components with different lon
+        if var_name in ["ua", "va"]:
+            # Let's assume hus and ta have the target longitude values, and they are already loaded
+            target_lon = sliced_gcm.lon if "lon" in sliced_gcm else data_var.lon
+            target_lat = sliced_gcm.lat if "lat" in sliced_gcm else data_var.lat
+            target_lev = sliced_gcm.lev if "lev" in sliced_gcm else data_var.lev
+
+            # Interpolate va to match the target latitude grid
+            if not data_var.lat.equals(target_lat):
+                data_var = data_var.interp(
+                    lat=target_lat,
+                    method="linear",
+                    kwargs={"fill_value": "extrapolate"},
+                )
+            if not data_var.lon.equals(target_lon):
+                data_var = data_var.interp(
+                    lon=target_lon,
+                    method="linear",
+                    kwargs={"fill_value": "extrapolate"},
+                )
+            # Assign the adjusted longitude values to ua or va
+            data_var = data_var.assign_coords(
+                lon=target_lon, lat=target_lat, lev=target_lev
+            )
+        if isinstance(data_var, xr.Dataset):  # Ensure we extract the correct DataArray
+            data_var = data_var[var_name]
+        # print(data_var)
+        sliced_gcm[var_name] = data_var
+
+    if config.bc_boundary == "lateral":
+        assign_gcm = assign_w_6hr(sliced_gcm, config.bc_boundary)
+        dgcm_3d, fraction_factors_gcm = convert_to_daily_with_fraction(assign_gcm)
+        # dgcm_3d = dgcm_3d.chunk({"time": 1000, "lat": 'auto', "lon": 'auto'})
+        dgcm_3d.load().to_netcdf(
+            f"{temp_dir}/temp_gcm_daily_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+        )
+    # =============== Load GCM end ===============
+
+    # =============== Load Obs ===============
+    sliced_obs = xr.Dataset()
+
+    # Load each variable and adjust longitude for ua and va if necessary
+    for var_name, file_paths in file_paths_by_variable_obs.items():
+        obs_var = load_preprocess_variable(
+            file_paths,
+            var_name,
+            level,
+            lat_range,
+            lon_range,
+            startyear_h,
+            endyear_h,
+        )
+        obs_var = obs_var.astype("float32")
+        # Add the processed variable to the dataset
+        # print(obs_var)
+        sliced_obs[var_name] = obs_var[var_name]
+    # sliced_obs = sliced_obs.chunk({"time": 500, "lat": -1, "lon": -1})
+    # Rename variables
+    if bc_boundary == "lateral":
+        assign_obs = assign_w_6hr(sliced_obs, bc_boundary)
+        dobs_3d, fraction_factors_obs = convert_to_daily_with_fraction(assign_obs)
+        # dobs_3d = dobs_3d.chunk({"time": 1000, "lat": 'auto', "lon": 'auto'})
+        dobs_3d.load().to_netcdf(
+            f"{temp_dir}/temp_obs_daily_{startyear_h}_{endyear_h}.nc"
+        )
+    # =============== Load Obs end ===============
+
+    # Load the processed GCM and Obs data
+    gcm = xr.open_dataset(
+        f"{temp_dir}/temp_gcm_daily_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+    )
+    era = xr.open_dataset(f"{temp_dir}/temp_obs_daily_{startyear_h}_{endyear_h}.nc")
+    bcd = xr.open_dataset(
+        f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+    )
+    assign_bcd = assign_w_6hr(bcd, bc_boundary)
+    bcd_3d, fraction_factors_bcd = convert_to_daily_with_fraction(assign_bcd)
+    bcd_3d = bcd_3d.compute()
+
+    # calculate mean over whole periods
+    g_d = cal_mean(gcm)
+    e_d = cal_mean(era)
+    d_d = cal_mean(bcd_3d)
+
+    # Dictionary containing vmin and vmax for each variable
+    variable_limits = {
+        "w": {"vmin": -10, "vmax": 10},
+        "ta": {"vmin": -3, "vmax": 3},
+        "hus": {"vmin": -1, "vmax": 1},
+    }
+
+    # Plotting bias maps for each variable in a 3-row by 2-column grid
+    variables = ["w", "ta", "hus"]
+    plot_bias_grid(
+        g_d,
+        d_d,
+        e_d,
+        variables,
+        "mean",
+        "Daily Mean",
+        cmap="RdBu_r",
+        variable_limits=variable_limits,
+        central_longitude=180,
+    )
+
+    # calculate mean over whole periods
+    g_ds = cal_std(gcm)
+    e_ds = cal_std(era)
+    d_ds = cal_std(bcd_3d)
+
+    variable_limits = {
+        "w": {"vmin": -10, "vmax": 10},
+        "ta": {"vmin": -3, "vmax": 3},
+        "hus": {"vmin": -1.5, "vmax": 1.5},
+    }
+
+    plot_bias_grid(
+        g_ds,
+        d_ds,
+        e_ds,
+        variables,
+        "std",
+        "Daily Std.",
+        cmap="RdBu_r",
+        variable_limits=variable_limits,
+        central_longitude=180,
+    )
+
+    # calculate auto-corr over whole periods
+    d_da = cal_acor(adjust_longitude(bcd_3d), "D", variables)
+    g_da = cal_acor(adjust_longitude(gcm), "D", variables)
+    e_da = cal_acor(adjust_longitude(era), "D", variables)
+
+    variable_limits = {
+        "w": {"vmin": -0.5, "vmax": 0.5},
+        "ta": {"vmin": -0.5, "vmax": 0.5},
+        "hus": {"vmin": -0.15, "vmax": 0.15},
+    }
+
+    plot_bias_grid_auto(
+        g_da,
+        d_da,
+        e_da,
+        e_d,
+        variables,
+        "lag1",
+        "Daily Auto-correlation.",
+        cmap="RdBu_r",
+        variable_limits=variable_limits,
+        central_longitude=180,
+    )
+
+    d_dc = cal_ccor(adjust_longitude(bcd_3d), "D", variables)
+    g_dc = cal_ccor(adjust_longitude(gcm), "D", variables)
+    e_dc = cal_ccor(adjust_longitude(era), "D", variables)
+
+    variable_limits = {
+        "w": {"vmin": -0.7, "vmax": 0.7},
+        "ta": {"vmin": -0.7, "vmax": 0.7},
+        "hus": {"vmin": -0.7, "vmax": 0.7},
+    }
+
+    plot_bias_grid_cross(
+        g_dc,
+        d_dc,
+        e_dc,
+        e_d,
+        variables,
+        "cross",
+        "Daily Cross-correlation.",
+        cmap="RdBu_r",
+        variable_limits=variable_limits,
+        central_longitude=180,
+    )
+
+    # Remove the temporary directory and its contents
+    shutil.rmtree(temp_dir)
+    print("Intermediate files deleted.")
+
+
+# scatter plot should be here
 
 # functions for sst -------------------------------------------------
 

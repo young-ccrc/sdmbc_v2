@@ -25,6 +25,7 @@ from data_preparation import (
     generate_file_paths_obs,
     validate_inputs,
 )
+from figurefunction import save_figure_3d
 
 # sys.path.append("/g/data/w28/yk8692/sdmbc_v2/sdmbc_v2")
 
@@ -416,6 +417,8 @@ def main(config):
             full_bc_corrected = full_bc_corrected.transpose("time", "lat", "lon")
 
         print("save the bc model")
+        full_bc_corrected = full_bc_corrected.astype("float32")  # save as float32
+
         # Save the BC model
         if bc_boundary == "lateral":
             np.save(
@@ -451,30 +454,19 @@ def main(config):
         print(f"Completed processing in {elapsed_time_minutes:.2f} minutes")
 
         if config.draw_figure:
-            ds_corrected_day = assign_w_day(full_bc_corrected, bc_boundary)
             if bc_boundary == "lateral":
                 print("Drawing figures")
                 if config.sub_daily_correction:
                     print("K-S test has been included")
-                    statistics = AnalysisBC(
-                        daily_gcm,
-                        daily_obs,
-                        ds_corrected_day,
-                        variables,
-                        config.out_figure_path,
-                        kstest=True,
+                    save_figure_3d(
+                        file_paths_by_variable_gcm, file_paths_by_variable_obs
                     )
                 else:
                     print("K-S test has not been included")
-                    statistics = AnalysisBC(
-                        daily_gcm,
-                        daily_obs,
-                        ds_corrected_day,
-                        variables,
-                        config.out_figure_path,
-                        kstest=False,
+                    save_figure_3d(
+                        file_paths_by_variable_gcm, file_paths_by_variable_obs
                     )
-                statistics.figure_atmos()
+
                 print("Finish 3d field")
 
 
