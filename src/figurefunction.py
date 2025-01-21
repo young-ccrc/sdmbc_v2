@@ -34,7 +34,7 @@ import cartopy  # type: ignore
 # import matplotlib.colors as colors
 # from mpl_toolkits.axes_grid1 import make_axes_locatable
 import cartopy.crs as ccrs  # type: ignore
-import cartopy.feature as cfeature
+import cartopy.feature as cfeature  # type: ignore
 
 # Plotting
 import matplotlib.pyplot as plt  # Plotting
@@ -134,53 +134,261 @@ def cal_std(ds):
 
 
 # Lag1 auto-correlation
-def cal_acor(ds, period, variable):  # period: M, QS-DEC, Y
-    """
-    Calculate the lag1 auto-correlation of given variables 'variable'
-    in a given dataset 'ds' over a given time period 'period'.
+# def cal_acor(ds, period, variable):  # period: M, QS-DEC, Y
+#     """
+#     Calculate the lag1 auto-correlation of given variables 'variable'
+#     in a given dataset 'ds' over a given time period 'period'.
 
+
+#     """
+#     if period != "D":
+#         ds = ds.resample(time=period).mean("time")
+#     temp = []
+#     cor_matrix = np.zeros([len(variable), len(ds["lat"]), len(ds["lon"])])
+#     for v in range(0, len(variable)):
+#         var = variable[v]
+#         for i in range(0, len(ds["lat"])):
+#             for j in range(0, len(ds["lon"])):
+#                 temp = np.corrcoef(
+#                     ds[var][1:, i, j], ds[var][0 : (len(ds.time) - 1), i, j]
+#                 )
+#                 cor_matrix[v, i, j] = temp[0, 1]
+#     return cor_matrix
+def cal_acor(ds, period, var):
+    """
+    Calculate the lag1 auto-correlation of given variables in a dataset over a specific time period.
+
+    Args:
+        ds (xarray.Dataset): The dataset containing variables.
+        period (str): Resampling period (e.g., 'D', 'M', 'Y').
+        variables (list of str): List of variable names to calculate autocorrelation for.
+
+    Returns:
+        dict: A dictionary with autocorrelation values for each variable.
     """
     if period != "D":
-        ds = ds.resample(time=period).mean("time")
-    temp = []
-    cor_matrix = np.zeros([len(variable), len(ds["lat"]), len(ds["lon"])])
-    for v in range(0, len(variable)):
-        var = variable[v]
-        for i in range(0, len(ds["lat"])):
-            for j in range(0, len(ds["lon"])):
-                temp = np.corrcoef(
-                    ds[var][1:, i, j], ds[var][0 : (len(ds.time) - 1), i, j]
-                )
-                cor_matrix[v, i, j] = temp[0, 1]
-    return cor_matrix
+        ds = ds.resample(time=period).mean()
+
+    ds = ds.chunk({"time": -1})
+
+    shifted_ds = ds[var].shift(time=1)
+    autocorr = xr.apply_ufunc(
+        lambda x, y: (
+            np.corrcoef(x[~np.isnan(x) & ~np.isnan(y)], y[~np.isnan(x) & ~np.isnan(y)])[
+                0, 1
+            ]
+            if len(x[~np.isnan(x) & ~np.isnan(y)]) > 1
+            else np.nan
+        ),
+        ds[var],
+        shifted_ds,
+        input_core_dims=[["time"], ["time"]],
+        vectorize=True,
+        dask="parallelized",
+        output_dtypes=[float],
+    )
+
+    return autocorr
 
 
 # Lag0 cross-correlation
-def cal_ccor(ds, period, v):
-    """
-    Calculate the lag0 cross-correlation of given variables 'variable'
-    in a given dataset 'ds' over a given time period 'period'.
+# def cal_ccor(ds, period, v):
+#     """
+#     Calculate the lag0 cross-correlation of given variables 'variable'
+#     in a given dataset 'ds' over a given time period 'period'.
 
+
+#     """
+#     if period != "D":
+#         ds = ds.resample(time=period).mean("time")
+#     temp = []
+#     cor_matrix = np.zeros([len(v), len(ds["lat"]), len(ds["lon"])])
+#     for i in range(0, len(ds["lat"])):
+#         for j in range(0, len(ds["lon"])):
+#             temp = np.corrcoef(ds[v[0]][:, i, j], ds[v[1]][:, i, j])
+#             cor_matrix[0, i, j] = temp[0, 1]
+#             temp = np.corrcoef(ds[v[0]][:, i, j], ds[v[2]][:, i, j])
+#             cor_matrix[1, i, j] = temp[0, 1]
+#             temp = np.corrcoef(ds[v[1]][:, i, j], ds[v[2]][:, i, j])
+#             cor_matrix[2, i, j] = temp[0, 1]
+#     return cor_matrix
+def cal_ccor(ds, period, vars_to_correlate):
+    """
+    Calculate the lag-0 cross-correlation for given pairs of variables in a dataset.
+
+    Args:
+        ds (xarray.Dataset): The dataset containing variables.
+        period (str): Resampling period (e.g., 'D', 'M', 'Y').
+        vars_to_correlate (list of tuple): List of variable pairs to calculate cross-correlation for.
+
+    Returns:
+        dict: A dictionary with cross-correlation values for each pair of variables.
     """
     if period != "D":
-        ds = ds.resample(time=period).mean("time")
-    temp = []
-    cor_matrix = np.zeros([len(v), len(ds["lat"]), len(ds["lon"])])
-    for i in range(0, len(ds["lat"])):
-        for j in range(0, len(ds["lon"])):
-            temp = np.corrcoef(ds[v[0]][:, i, j], ds[v[1]][:, i, j])
-            cor_matrix[0, i, j] = temp[0, 1]
-            temp = np.corrcoef(ds[v[0]][:, i, j], ds[v[2]][:, i, j])
-            cor_matrix[1, i, j] = temp[0, 1]
-            temp = np.corrcoef(ds[v[1]][:, i, j], ds[v[2]][:, i, j])
-            cor_matrix[2, i, j] = temp[0, 1]
-    return cor_matrix
+        ds = ds.resample(time=period).mean()
+
+    ds = ds.chunk({"time": -1})  # Ensure time is a single chunk
+    cross_correlations = {}
+
+    for var1, var2 in vars_to_correlate:
+        cross_corr = xr.apply_ufunc(
+            lambda x, y: (
+                np.corrcoef(
+                    x[~np.isnan(x) & ~np.isnan(y)], y[~np.isnan(x) & ~np.isnan(y)]
+                )[0, 1]
+                if len(x[~np.isnan(x) & ~np.isnan(y)]) > 1
+                else np.nan
+            ),
+            ds[var1],
+            ds[var2],
+            input_core_dims=[["time"], ["time"]],
+            vectorize=True,
+            dask="parallelized",
+            output_dtypes=[float],
+        )
+        cross_correlations[(var1, var2)] = cross_corr
+
+    return cross_correlations
 
 
-# ks test
-def ks_pvalue(a, b):
-    statistic, pvalue = ks_2samp(a, b)
-    return statistic, pvalue
+def ks_pvalue(obs, sim):
+    """Compute the KS test p-value for two 1D arrays."""
+    if len(obs) == 0 or len(sim) == 0:
+        return np.nan
+    return ks_2samp(obs, sim).pvalue
+
+
+def calculate_ks_agreement(obs_ds, sim_ds, variables, intervals):
+    ks_agreement = {
+        interval: {var: {"p>=0.05": 0, "p>=0.01": 0} for var in variables}
+        for interval in intervals
+    }
+
+    for interval in intervals:
+        obs_interval = obs_ds.sel(time=obs_ds.time.dt.hour == interval)
+        sim_interval = sim_ds.sel(time=sim_ds.time.dt.hour == interval)
+
+        for var in variables:
+            p_values = xr.apply_ufunc(
+                ks_pvalue,
+                obs_interval[var],
+                sim_interval[var],
+                input_core_dims=[["time"], ["time"]],
+                output_core_dims=[[]],
+                vectorize=True,
+            )
+
+            ks_agreement[interval][var]["p>=0.05"] = (
+                100 * (p_values >= 0.05).mean().item()
+            )
+            ks_agreement[interval][var]["p>=0.01"] = (
+                100 * (p_values >= 0.01).mean().item()
+            )
+
+    return ks_agreement
+
+
+# Function to extract p-values from dictionary format
+def extract_p_values(ks_dict, threshold):
+    if isinstance(ks_dict, dict):
+        return ks_dict.get(threshold, float("nan"))
+    elif isinstance(ks_dict, str):
+        try:
+            ks_dict = eval(ks_dict)
+            return ks_dict.get(threshold, float("nan"))
+        except:
+            return float("nan")
+    return float("nan")
+
+
+def compute_ks_comparison(
+    obs_ds,
+    sim_ds_gcm,
+    sim_ds_qm,
+    variables,
+    level,
+    output_file_path,
+    intervals=(0, 6, 12, 18),
+):
+    """
+    Compute the KS test agreement for both GCM and QM-corrected datasets and return a formatted DataFrame.
+
+    Parameters:
+        obs_ds (xarray.Dataset): Observational dataset.
+        sim_ds_gcm (xarray.Dataset): Original GCM dataset.
+        sim_ds_qm (xarray.Dataset): QM-corrected dataset.
+        variables (list): List of variables to analyze.
+        intervals (tuple): 6-hour intervals to analyze.
+
+    Returns:
+        pd.DataFrame: KS test agreement results formatted as a comparison table.
+    """
+
+    # Compute KS agreement for GCM and QM datasets
+    ks_results_gcm = calculate_ks_agreement(obs_ds, sim_ds_gcm, variables, intervals)
+    ks_results_qm = calculate_ks_agreement(obs_ds, sim_ds_qm, variables, intervals)
+
+    # Prepare data for comparison table
+    data = []
+    for interval in intervals:
+        for var in variables:
+            data.append(
+                [
+                    interval,
+                    var,
+                    ks_results_gcm[interval][var],  # KS agreement for GCM
+                    ks_results_qm[interval][var],  # KS agreement for QM-corrected
+                ]
+            )
+
+    # Create a DataFrame for comparison
+    df_ks_comparison = pd.DataFrame(
+        data,
+        columns=["Time Interval", "Variable", "GCM KS Agreement", "QM KS Agreement"],
+    )
+
+    # Extract "p≥0.05" and "p≥0.01" values for GCM and QM KS agreement
+    ks_comparison = df_ks_comparison.copy()
+    ks_comparison["GCM KS Agreement (p≥0.05)"] = df_ks_comparison[
+        "GCM KS Agreement"
+    ].apply(lambda x: extract_p_values(x, "p>=0.05"))
+    ks_comparison["GCM KS Agreement (p≥0.01)"] = df_ks_comparison[
+        "GCM KS Agreement"
+    ].apply(lambda x: extract_p_values(x, "p>=0.01"))
+    ks_comparison["QM KS Agreement (p≥0.05)"] = df_ks_comparison[
+        "QM KS Agreement"
+    ].apply(lambda x: extract_p_values(x, "p>=0.05"))
+    ks_comparison["QM KS Agreement (p≥0.01)"] = df_ks_comparison[
+        "QM KS Agreement"
+    ].apply(lambda x: extract_p_values(x, "p>=0.01"))
+
+    # Convert values to formatted percentage strings
+    for col in [
+        "GCM KS Agreement (p≥0.05)",
+        "GCM KS Agreement (p≥0.01)",
+        "QM KS Agreement (p≥0.05)",
+        "QM KS Agreement (p≥0.01)",
+    ]:
+        ks_comparison[col] = ks_comparison[col].apply(
+            lambda x: f"{x:.2f}%" if not pd.isna(x) else "N/A"
+        )
+
+    # Reorder the columns
+    ks_comparison = ks_comparison[
+        [
+            "Time Interval",
+            "Variable",
+            "GCM KS Agreement (p≥0.05)",
+            "GCM KS Agreement (p≥0.01)",
+            "BC KS Agreement (p≥0.05)",
+            "BC KS Agreement (p≥0.01)",
+        ]
+    ]
+    ks_comparison.to_csv(
+        f"{output_file_path}/ks_{level}_comparison_results.txt", sep="\t", index=False
+    )
+
+    return ks_comparison
 
 
 def rounder(x):
@@ -190,40 +398,40 @@ def rounder(x):
         return int(np.floor(x))
 
 
-def calculate_ks_matrix(de, ds, variable):
-    """
-    Calculate the Kolmogorov-Smirnov (KS) test matrix and percentage of p-values above a given threshold (0.05) for each variable.
+# def calculate_ks_matrix(de, ds, variable):
+#     """
+#     Calculate the Kolmogorov-Smirnov (KS) test matrix and percentage of p-values above a given threshold (0.05) for each variable.
 
-    Parameters:
-    de (xarray.Dataset): Observed xarray dataset containing variables to be compared.
-    ds (xarray.Dataset): Modelled xarray dataset containing variables to be compared.
-    variable (list): List of variable names to perform the KS test on.
+#     Parameters:
+#     de (xarray.Dataset): Observed xarray dataset containing variables to be compared.
+#     ds (xarray.Dataset): Modelled xarray dataset containing variables to be compared.
+#     variable (list): List of variable names to perform the KS test on.
 
-    Returns:
-    ks_result (numpy.ndarray): An array containing the percentage of p-values greater than or equal to 0.05 for each variable.
-    """
+#     Returns:
+#     ks_result (numpy.ndarray): An array containing the percentage of p-values greater than or equal to 0.05 for each variable.
+#     """
 
-    ks_matrix = np.empty((len(variable), len(ds["lat"]), len(ds["lon"])))
+#     ks_matrix = np.empty((len(variable), len(ds["lat"]), len(ds["lon"])))
 
-    for k, var in enumerate(variable):
-        g_statistic, g_pvalue = xr.apply_ufunc(
-            ks_pvalue,
-            de[var],
-            ds[var],
-            input_core_dims=[["time"], ["time"]],
-            output_core_dims=[[], []],
-            vectorize=True,
-        )
+#     for k, var in enumerate(variable):
+#         g_statistic, g_pvalue = xr.apply_ufunc(
+#             ks_pvalue,
+#             de[var],
+#             ds[var],
+#             input_core_dims=[["time"], ["time"]],
+#             output_core_dims=[[], []],
+#             vectorize=True,
+#         )
 
-        ks_matrix[k, :, :] = g_pvalue
+#         ks_matrix[k, :, :] = g_pvalue
 
-    ks_result = np.empty([len(variable)])
+#     ks_result = np.empty([len(variable)])
 
-    for k in range(0, len(variable)):
-        ks_out = xr.where(ks_matrix[k] >= 0.05, 1, 0)
-        ks_result[k] = 100 * np.sum(ks_out) / (len(ds.lat) * len(ds.lon))
+#     for k in range(0, len(variable)):
+#         ks_out = xr.where(ks_matrix[k] >= 0.05, 1, 0)
+#         ks_result[k] = 100 * np.sum(ks_out) / (len(ds.lat) * len(ds.lon))
 
-    return ks_result
+#     return ks_result
 
 
 # Plot functions
@@ -314,6 +522,7 @@ def plot_bias_grid(
     data_mbc,
     data_era5,
     variables,
+    level,
     statistic,
     title_prefix,
     cmap="RdBu_r",
@@ -334,6 +543,10 @@ def plot_bias_grid(
     central_longitude (float): The central longitude for the map projection.
     """
     # Adjust longitude for all datasets
+    data_gcm = data_gcm.sel(level=level).squeeze()
+    data_mbc = data_mbc.sel(level=level).squeeze()
+    data_era5 = data_era5.sel(level=level).squeeze()
+
     data_gcm = adjust_longitude(data_gcm)
     data_mbc = adjust_longitude(data_mbc)
     data_era5 = adjust_longitude(data_era5)
@@ -410,12 +623,12 @@ def plot_bias_grid(
 
     # Adjust layout to prevent overlap
     plt.tight_layout()
-    plt.show()
     plt.savefig(
-        f"{out_figure_path}/sdmbc_{statistic}_{startyear_h}_{endyear_h}.png",
+        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear_h}_{endyear_h}.jpg",
         dpi=300,
         bbox_inches="tight",
     )
+    plt.show()
 
 
 # Function to plot bias maps for multiple variables in a grid layout
@@ -425,6 +638,7 @@ def plot_bias_grid_auto(
     data_era5,
     ref,
     variables,
+    level,
     statistic,
     title_prefix,
     cmap="RdBu_r",
@@ -444,6 +658,11 @@ def plot_bias_grid_auto(
     variable_limits (dict): Dictionary containing vmin and vmax for each variable.
     central_longitude (float): The central longitude for the map projection.
     """
+
+    data_gcm = data_gcm.sel(level=level).squeeze()
+    data_mbc = data_mbc.sel(level=level).squeeze()
+    data_era5 = data_era5.sel(level=level).squeeze()
+
     # Adjust longitude for all datasets
     ref = adjust_longitude(ref)
     # Set up the figure with 3 rows and 2 columns
@@ -519,12 +738,12 @@ def plot_bias_grid_auto(
 
     # Adjust layout to prevent overlap
     plt.tight_layout()
-    plt.show()
     plt.savefig(
-        f"{out_figure_path}/sdmbc_{statistic}_{startyear_h}_{endyear_h}.png",
+        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear_h}_{endyear_h}.jpg",
         dpi=300,
         bbox_inches="tight",
     )
+    plt.show()
 
 
 # Function to plot bias maps for multiple variables in a grid layout
@@ -534,6 +753,7 @@ def plot_bias_grid_cross(
     data_era5,
     ref,
     variables,
+    level,
     statistic,
     title_prefix,
     cmap="RdBu_r",
@@ -553,6 +773,11 @@ def plot_bias_grid_cross(
     variable_limits (dict): Dictionary containing vmin and vmax for each variable.
     central_longitude (float): The central longitude for the map projection.
     """
+
+    data_gcm = data_gcm.sel(level=level).squeeze()
+    data_mbc = data_mbc.sel(level=level).squeeze()
+    data_era5 = data_era5.sel(level=level).squeeze()
+
     # Adjust longitude for all datasets
     ref = adjust_longitude(ref)
     ctitle = ["w & T", "w & q", "T & q"]
@@ -569,7 +794,7 @@ def plot_bias_grid_cross(
     for i, var in enumerate(variables):
         # GCM Bias vs ERA5
         ax_gcm = axes[i, 0]
-        bias_gcm = data_gcm[i] - data_era5[i]
+        bias_gcm = data_gcm[variables[i]] - data_era5[variables[i]]
         vmin, vmax = variable_limits[var]["vmin"], variable_limits[var]["vmax"]
         bias_plot_gcm = ax_gcm.pcolormesh(
             ref["lon"],
@@ -599,7 +824,7 @@ def plot_bias_grid_cross(
 
         # MBC Bias vs ERA5
         ax_mbc = axes[i, 1]
-        bias_mbc = data_mbc[i] - data_era5[i]
+        bias_mbc = data_mbc[variables[i]] - data_era5[variables[i]]
         vmin, vmax = variable_limits[var]["vmin"], variable_limits[var]["vmax"]
         bias_plot_mbc = ax_mbc.pcolormesh(
             ref["lon"],
@@ -629,16 +854,16 @@ def plot_bias_grid_cross(
 
     # Adjust layout to prevent overlap
     plt.tight_layout()
-    plt.show()
     plt.savefig(
-        f"{out_figure_path}/sdmbc_{statistic}_{startyear_h}_{endyear_h}.png",
+        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear_h}_{endyear_h}.jpg",
         dpi=300,
         bbox_inches="tight",
     )
+    plt.show()
 
 
 # Scatter plot of 3d atmospheric variables
-def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
+def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs, level):
     lat_range = (lat_min, lat_max)
     lon_range = (lon_min, lon_max)
     level = 0
@@ -714,7 +939,7 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
         obs_var = obs_var.astype("float32")
         # Add the processed variable to the dataset
         # print(obs_var)
-        sliced_obs[var_name] = obs_var[var_name]
+        sliced_obs[var_name] = obs_var
     # sliced_obs = sliced_obs.chunk({"time": 500, "lat": -1, "lon": -1})
     # Rename variables
     if bc_boundary == "lateral":
@@ -747,7 +972,7 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
     variable_limits = {
         "w": {"vmin": -10, "vmax": 10},
         "ta": {"vmin": -3, "vmax": 3},
-        "hus": {"vmin": -1, "vmax": 1},
+        "hus": {"vmin": -2, "vmax": 2},
     }
 
     # Plotting bias maps for each variable in a 3-row by 2-column grid
@@ -757,6 +982,7 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
         d_d,
         e_d,
         variables,
+        level,
         "mean",
         "Daily Mean",
         cmap="RdBu_r",
@@ -771,8 +997,8 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
 
     variable_limits = {
         "w": {"vmin": -10, "vmax": 10},
-        "ta": {"vmin": -3, "vmax": 3},
-        "hus": {"vmin": -1.5, "vmax": 1.5},
+        "ta": {"vmin": -1, "vmax": 1},
+        "hus": {"vmin": -5, "vmax": 5},
     }
 
     plot_bias_grid(
@@ -780,6 +1006,7 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
         d_ds,
         e_ds,
         variables,
+        level,
         "std",
         "Daily Std.",
         cmap="RdBu_r",
@@ -804,6 +1031,7 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
         e_da,
         e_d,
         variables,
+        level,
         "lag1",
         "Daily Auto-correlation.",
         cmap="RdBu_r",
@@ -811,14 +1039,15 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
         central_longitude=180,
     )
 
-    d_dc = cal_ccor(adjust_longitude(bcd_3d), "D", variables)
-    g_dc = cal_ccor(adjust_longitude(gcm), "D", variables)
-    e_dc = cal_ccor(adjust_longitude(era), "D", variables)
+    variable_pairs = [("w", "ta"), ("ta", "hus"), ("hus", "w")]
+    d_dc = cal_ccor(adjust_longitude(bcd_3d), "D", variable_pairs)
+    g_dc = cal_ccor(adjust_longitude(gcm), "D", variable_pairs)
+    e_dc = cal_ccor(adjust_longitude(era), "D", variable_pairs)
 
     variable_limits = {
-        "w": {"vmin": -0.7, "vmax": 0.7},
-        "ta": {"vmin": -0.7, "vmax": 0.7},
-        "hus": {"vmin": -0.7, "vmax": 0.7},
+        ("w", "ta"): {"vmin": -0.7, "vmax": 0.7},
+        ("ta", "hus"): {"vmin": -0.7, "vmax": 0.7},
+        ("hus", "w"): {"vmin": -0.7, "vmax": 0.7},
     }
 
     plot_bias_grid_cross(
@@ -826,7 +1055,8 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
         d_dc,
         e_dc,
         e_d,
-        variables,
+        variable_pairs,
+        level,
         "cross",
         "Daily Cross-correlation.",
         cmap="RdBu_r",
@@ -834,6 +1064,17 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs):
         central_longitude=180,
     )
 
+    if config.sub_daily_correction:
+        print("K-S test has been included")
+        compute_ks_comparison(
+            fraction_factors_obs,
+            fraction_factors_gcm,
+            fraction_factors_bcd,
+            variables,
+            level,
+            config.output_figure_path,
+            intervals=(0, 6, 12, 18),
+        )
     # Remove the temporary directory and its contents
     shutil.rmtree(temp_dir)
     print("Intermediate files deleted.")

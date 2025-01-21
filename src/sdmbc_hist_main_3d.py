@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import shutil
 import sys
@@ -21,6 +22,7 @@ from config import config  # type: ignore
 # from data_preparation import   # type: ignore
 from data_preparation import (
     assign_w_day,
+    determine_tiles,
     generate_file_paths,
     generate_file_paths_obs,
     validate_inputs,
@@ -184,10 +186,13 @@ def main(config):
     }
 
     # =============== Load obs end ===============
-    n_lat_tiles = 10
-    n_lon_tiles = 10
+    # Dynamically determine number of tiles
 
-    temp_dir = os.path.join(out_path, "temp_tiles_slevel_elevel")
+    n_lat_tiles, n_lon_tiles = determine_tiles(
+        file_paths_by_variable_obs, variables[0], lat_min, lat_max, lon_min, lon_max
+    )
+
+    temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{slevel}_{elevel}")
     os.makedirs(temp_dir, exist_ok=True)
 
     print("start dask bc correction")
@@ -201,14 +206,13 @@ def main(config):
         n_lon_tiles=n_lon_tiles,
     )
 
-    # To store all bc_params for later concatenation
-    all_bc_params = []
     for level in range(slevel, elevel + 1):
         # Record the start time for this level
         start_time = time.time()
 
         print(f"Starting processing for level {level}")
-
+        # To store all bc_params for later concatenation
+        all_bc_params = []
         # for idx, tile in enumerate(tiles):
         for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
             for var_name, file_paths in file_paths_by_variable_obs.items():
@@ -231,12 +235,12 @@ def main(config):
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
                 output_params = f"{temp_dir}/bc_params_tile_3d_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.npy"
 
-                # Check if both output files already exist
-                if os.path.exists(output_file) and os.path.exists(output_params):
-                    print(
-                        f"Both output file and params for tile {idx}, level {level} already exist. Skipping..."
-                    )
-                    continue  # Skip processing this tile
+                # # Check if both output files already exist
+                # if os.path.exists(output_file) and os.path.exists(output_params):
+                #     print(
+                #         f"Both output file and params for tile {idx}, level {level} already exist. Skipping..."
+                #     )
+                #     continue  # Skip processing this tile
 
                 # Process the tile if either output is missing
                 print(f"Processing tile {idx}, level {level}...")
@@ -267,6 +271,7 @@ def main(config):
                     np.save(output_params, bc_params_tile)
                 else:
                     print(f"File {output_params} already exists. Skipping...")
+                    # continue
                 # bc_corrected_gcm_hist_tile.compute().to_netcdf(
                 #     output_file
                 # )  # Save tile result
@@ -453,21 +458,16 @@ def main(config):
         ) / 60  # Convert seconds to minutes
         print(f"Completed processing in {elapsed_time_minutes:.2f} minutes")
 
-        if config.draw_figure:
-            if bc_boundary == "lateral":
-                print("Drawing figures")
-                if config.sub_daily_correction:
-                    print("K-S test has been included")
-                    save_figure_3d(
-                        file_paths_by_variable_gcm, file_paths_by_variable_obs
-                    )
-                else:
-                    print("K-S test has not been included")
-                    save_figure_3d(
-                        file_paths_by_variable_gcm, file_paths_by_variable_obs
-                    )
-
-                print("Finish 3d field")
+    if config.draw_figure:
+        if bc_boundary == "lateral":
+            print("Drawing figures")
+            # print("K-S test has been included")
+            # bottom level test for 3d field
+            level = 0
+            save_figure_3d(
+                file_paths_by_variable_gcm, file_paths_by_variable_obs, level
+            )
+            print("Finish 3d field")
 
 
 if __name__ == "__main__":

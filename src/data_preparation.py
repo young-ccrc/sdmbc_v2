@@ -36,6 +36,7 @@ Modules Imported:
 """
 
 import glob
+import math
 import re
 
 import dask  # type: ignore
@@ -45,6 +46,7 @@ import numpy as np  # arrays and matrix math # type: ignore
 import pandas as pd  # type: ignore
 import xarray as xr  # type: ignore
 import yaml  # type: ignore
+
 from config import config
 
 # import os
@@ -365,12 +367,13 @@ def load_preprocess_variable(
     Returns:
         xarray.DataArray: Preprocessed dataset for the variable.
     """
-
+    # print(file_paths)
     ds = xr.open_mfdataset(
         file_paths,
         combine="by_coords",
-        chunks={"time": 1000, "lat": -1, "lon": -1},
+        chunks={"time": 1000, "lat": "auto", "lon": "auto"},
     )
+    # print(ds)
     if config.bc_boundary == "lateral":
         ds_sel = (
             ds[var_name]
@@ -523,7 +526,7 @@ def assign_w_day(ds, bc_boundary):
 
     if bc_boundary == "lateral":
         # Convert specific humidity from kg/kg to g/kg
-        # ds_daily["hus"] *= 1000
+        ds_daily["hus"] *= 10000
 
         # Calculate wind speed and add as a new variable.
         # ds_daily["w"] = np.sqrt(ds["u"] ** 2 + ds["v"] ** 2).resample(time="D").sum()
@@ -573,13 +576,13 @@ def assign_w_6hr(do, bc_boundary):
     ds = do.copy()
     if bc_boundary == "lateral":
         # Convert specific humidity from kg/kg to g/kg directly on the dataset
-        ds["hus"] *= 1000
+        ds["hus"] *= 10000
 
         # Calculate wind speed and add as a new variable directly on the dataset
         # ds["w"] = np.sqrt(ds["u"] ** 2 + ds["v"] ** 2)
-        ds = ds.chunk(
-            {"time": 1000, "lat": -1, "lon": -1}
-        )  # Pre-chunking for efficiency
+        # ds = ds.chunk(
+        #     {"time": 1000, "lat": "auto", "lon": "auto"}
+        # )  # Pre-chunking for efficiency
         ds["w"] = xr.apply_ufunc(calculate_w, ds["ua"], ds["va"], dask="parallelized")
 
         ds["w"] *= 10
@@ -929,7 +932,9 @@ def convert_6hr_to_original_xr(bias_corrected_data_xr, g_u_xr, g_v_xr):
     )
 
     # Convert hus by dividing by 1000, back to original units
-    q_converted = bias_corrected_data_xr["hus"] / 1000.0
+    q_converted = (
+        bias_corrected_data_xr["hus"] / 10000
+    )  # change 1000 to 10000 to avoid small values
 
     # Convert ta by multiplying negative values by -1 using apply_ufunc for better parallelization
     t_converted = xr.apply_ufunc(
@@ -966,6 +971,41 @@ def convert_6hr_to_original_xr(bias_corrected_data_xr, g_u_xr, g_v_xr):
     return converted_data_xr
 
 
+def determine_tiles(file_paths, var, lat_min, lat_max, lon_min, lon_max):
+    """
+    Determines the number of tiles based on the total number of grid points.
+
+    Args:
+        file_paths_by_variable_obs (dict): Dictionary of variable names and their corresponding file paths.
+
+    Returns:
+        (int, int): Number of tiles for latitude and longitude.
+    """
+    ds_tile = xr.open_dataset(file_paths[var][0])
+    max_tile_size = 300
+    # Use the first variable's file paths to determine grid size
+    ds_tile = ds_tile.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
+    lat_size = ds_tile.sizes["lat"]
+    lon_size = ds_tile.sizes["lon"]
+
+    # Calculate total grid points and determine the number of tiles
+    total_points = lat_size * lon_size
+
+    # Calculate approximate tiles based on max_tile_size
+    approx_tiles = math.ceil(total_points / max_tile_size)
+    ratio = (lat_max - lat_min) / (lon_max - lon_min)
+
+    # Distribute tiles proportionally between latitude and longitude
+    n_lat_tiles = max(1, round(math.sqrt(approx_tiles * ratio)))
+    n_lon_tiles = max(1, round(approx_tiles / n_lat_tiles))
+
+    # Adjust to ensure tiles are within reasonable bounds
+    n_lat_tiles = min(n_lat_tiles, lat_size)
+    n_lon_tiles = min(n_lon_tiles, lon_size)
+
+    return n_lat_tiles, n_lon_tiles
+
+
 def determine_base_path(year):
     if year < 2015:
         return (
@@ -989,129 +1029,292 @@ def determine_base_path(year):
         )
 
 
-def generate_file_paths_future(variable, start_year, end_year):
-    file_paths = []
-    for year in range(start_year, end_year + 1):
-        base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(year)
-        if year == start_year and gna in ["ACCESS-ESM1-5"]:
-            prev_dec_path = f"{base_path}/{variable}/{sinf}/v{vers}/{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year-1}12*.nc"
-            file_paths.extend(glob.glob(prev_dec_path))
+# def generate_file_paths_future(variable, start_year, end_year):
+#     file_paths = []
+#     for year in range(start_year, end_year + 1):
+#         base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(year)
+#         if year == start_year and gna in ["ACCESS-ESM1-5"]:
+#             prev_dec_path = f"{base_path}/{variable}/{sinf}/v{vers}/{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year-1}12*.nc"
+#             file_paths.extend(glob.glob(prev_dec_path))
 
-        file_path_pattern = f"{base_path}/{variable}/{sinf}/v{vers}/{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year}*.nc"
-        file_paths.extend(glob.glob(file_path_pattern))
+#         file_path_pattern = f"{base_path}/{variable}/{sinf}/v{vers}/{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year}*.nc"
+#         file_paths.extend(glob.glob(file_path_pattern))
+
+
+#     return file_paths
+def generate_file_paths_future(variable, start_year, end_year, data_type):
+    """
+    Generates file paths for different types of data (future GCM, validation GCM, or validation OBS)
+    based on the variable and year range.
+
+    Parameters:
+        variable (str): The variable name (e.g., 'tas', 'pr').
+        start_year (int): Start year of the data.
+        end_year (int): End year of the data.
+        data_type (str): Type of data ('future', 'validation_gcm', 'validation_obs').
+
+    Returns:
+        list: List of file paths matching the given criteria.
+    """
+    file_paths = []
+    if config.bc_boundary == "lateral":
+        for year in range(start_year, end_year + 1):
+            if data_type == "future":
+                base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(year)
+                file_path_pattern_gcm = (
+                    f"{base_path}/{variable}/{sinf}/v{vers}/"
+                    f"{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year}*.nc"
+                )
+            elif data_type == "validation_gcm":
+                base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(year)
+                file_path_pattern_gcm = (
+                    f"{base_path}/{variable}/{sinf}/v{vers}/"
+                    f"{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year}*.nc"
+                )
+            # Include data from the previous December for specific cases (future GCM only)
+            if (
+                data_type == "future"
+                and year == start_year
+                and gna in ["ACCESS-ESM1-5"]
+            ):
+                prev_dec_path = (
+                    f"{base_path}/{variable}/{sinf}/v{vers}/"
+                    f"{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year-1}12*.nc"
+                )
+                file_paths.extend(glob.glob(prev_dec_path))
+
+    elif config.bc_boundary == "surface":
+        file_path_pattern_gcm = f"{config.obs_path}/{variable}_*_remapped.nc"
+
+    else:
+        raise ValueError(f"Unsupported data_type: {data_type}")
+
+    file_paths.extend(sorted(glob.glob(file_path_pattern_gcm)))
 
     return file_paths
 
 
-def load_and_combine_variables(
-    variables, level, lat_range, lon_range, start_year, end_year
-):
+def load_and_combine_variables(variables, start_year, end_year, data_type):
+    """
+    Load and combine historical and future GCM data for given variables
+    over specified year ranges.
+    """
+    lat_range = (config.lat_min, config.lat_max)  # Adjust as needed
+    lon_range = (config.lon_min, config.lon_max)  # Adjust as needed
+
+    sliced_ds_hist = xr.Dataset()
+    sliced_ds_future = xr.Dataset()
 
     # Handle historical data if start_year is before 2015
-    if start_year < 2015:
-        sliced_ds_hist = xr.Dataset()
-        hist_end_year = min(
-            end_year, 2014
-        )  # Ensure historical data goes up to 2014 at most
-        for variable in variables:
-            file_paths = generate_file_paths_future(
-                variable,
-                start_year,
-                hist_end_year,
-            )
-            data_var = load_preprocess_variable(
-                file_paths, variable, level - 1, lat_range, lon_range
-            )
-            if variable in ["ua", "va"]:
-                # Let's assume hus and ta have the target longitude values, and they are already loaded
-                target_lon = (
-                    sliced_ds_hist.lon if "lon" in sliced_ds_hist else data_var.lon
+    if config.bc_boundary == "lateral":
+        if start_year < 2015:
+            hist_end_year = min(end_year, 2014)
+            for variable in variables:
+                file_paths = generate_file_paths_future(
+                    variable, start_year, hist_end_year, data_type=data_type
                 )
-                target_lat = (
-                    sliced_ds_hist.lat if "lat" in sliced_ds_hist else data_var.lat
+                data_var = load_preprocess_variable(
+                    file_paths,
+                    variable,
+                    config.slevel,
+                    lat_range,
+                    lon_range,
+                    start_year,
+                    hist_end_year,
                 )
-                target_lev = (
-                    sliced_ds_hist.lev if "lev" in sliced_ds_hist else data_var.lev
-                )
-                # Check if va coordinates are different before interpolation
-                if not data_var.lat.equals(target_lat):
+                if variable in ["ua", "va"]:
+                    target_lon = (
+                        sliced_ds_hist.lon if "lon" in sliced_ds_hist else data_var.lon
+                    )
+                    target_lat = (
+                        sliced_ds_hist.lat if "lat" in sliced_ds_hist else data_var.lat
+                    )
+                    target_lev = (
+                        sliced_ds_hist.lev if "lev" in sliced_ds_hist else data_var.lev
+                    )
                     data_var = data_var.interp(
                         lat=target_lat,
-                        method="linear",
-                        kwargs={"fill_value": "extrapolate"},
-                    )
-                if not data_var.lon.equals(target_lon):
-                    data_var = data_var.interp(
                         lon=target_lon,
                         method="linear",
                         kwargs={"fill_value": "extrapolate"},
-                    )
-                # Assign the adjusted longitude values to ua or va
-                data_var = data_var.assign_coords(
-                    lon=target_lon, lat=target_lat, lev=target_lev
-                )
-            # datasets_list.append(data_var)
-            sliced_ds_hist[variable] = data_var
+                    ).assign_coords(lon=target_lon, lat=target_lat, lev=target_lev)
+                sliced_ds_hist[variable] = data_var
 
-    # Handle future data if end_year is 2015 or later
-    if end_year >= 2015:
-        sliced_ds_future = xr.Dataset()
-        future_start_year = max(
-            start_year, 2015
-        )  # Start from 2015 or the start_year if it's later
+        # Handle future data if end_year is 2015 or later
+        if end_year >= 2015:
+            future_start_year = max(start_year, 2015)
+            for variable in variables:
+                file_paths = generate_file_paths_future(
+                    variable, future_start_year, end_year, data_type=data_type
+                )
+                data_var = load_preprocess_variable(
+                    file_paths,
+                    variable,
+                    config.slevel,
+                    config.lat_range,
+                    config.lon_range,
+                    future_start_year,
+                    end_year,
+                )
+                if variable in ["ua", "va"]:
+                    target_lon = (
+                        sliced_ds_future.lon
+                        if "lon" in sliced_ds_future
+                        else data_var.lon
+                    )
+                    target_lat = (
+                        sliced_ds_future.lat
+                        if "lat" in sliced_ds_future
+                        else data_var.lat
+                    )
+                    target_lev = (
+                        sliced_ds_future.lev
+                        if "lev" in sliced_ds_future
+                        else data_var.lev
+                    )
+                    data_var = data_var.interp(
+                        lat=target_lat,
+                        lon=target_lon,
+                        method="linear",
+                        kwargs={"fill_value": "extrapolate"},
+                    ).assign_coords(lon=target_lon, lat=target_lat, lev=target_lev)
+                sliced_ds_future[variable] = data_var
+
+    elif config.bc_boundary == "surface":
         for variable in variables:
             file_paths = generate_file_paths_future(
+                variable, start_year, end_year, data_type=data_type
+            )
+            data_var = load_preprocess_variable(
+                file_paths,
                 variable,
-                future_start_year,
+                config.slevel,
+                lat_range,
+                lon_range,
+                start_year,
                 end_year,
             )
-            data_var = load_preprocess_variable(
-                file_paths, variable, level - 1, lat_range, lon_range
-            )
-            if variable in ["ua", "va"]:
-                # Let's assume hus and ta have the target longitude values, and they are already loaded
-                target_lon = (
-                    sliced_ds_future.lon if "lon" in sliced_ds_future else data_var.lon
-                )
-                target_lat = (
-                    sliced_ds_future.lat if "lat" in sliced_ds_future else data_var.lat
-                )
-                target_lev = (
-                    sliced_ds_future.lev if "lev" in sliced_ds_future else data_var.lev
-                )
-                # Check if va coordinates are different before interpolation
-                if not data_var.lat.equals(target_lat):
-                    data_var = data_var.interp(
-                        lat=target_lat,
-                        method="linear",
-                        kwargs={"fill_value": "extrapolate"},
-                    )
-                if not data_var.lon.equals(target_lon):
-                    data_var = data_var.interp(
-                        lon=target_lon,
-                        method="linear",
-                        kwargs={"fill_value": "extrapolate"},
-                    )
-                # Assign the adjusted longitude values to ua or va
-                data_var = data_var.assign_coords(
-                    lon=target_lon, lat=target_lat, lev=target_lev
-                )
-            # Check for variable adjustments (e.g., for 'ua', 'va') and apply if necessary
-            # datasets_list.append(data_var)
-            sliced_ds_future[variable] = data_var
+            sliced_ds_hist[variable] = data_var
 
-    # Ensure datasets are pre-chunked before combining
-    sliced_ds_hist = sliced_ds_hist.chunk({"time": 1000, "lat": -1, "lon": -1})
-    sliced_ds_future = sliced_ds_future.chunk({"time": 1000, "lat": -1, "lon": -1})
-
-    # Combine all loaded datasets into one, handling level, latitude, and longitude adjustments as needed
-    combined_ds = xr.combine_by_coords([sliced_ds_hist, sliced_ds_future])
-
-    # Optionally, rename variables if needed
-    # rename_dict = {"hus": "q", "ta": "t", "ua": "u", "va": "v"}
-    # combined_ds = combined_ds.rename(rename_dict)
+    # Combine historical and future datasets if both exist
+    combined_ds = xr.combine_by_coords(
+        [sliced_ds_hist, sliced_ds_future]
+        if sliced_ds_hist and sliced_ds_future
+        else ([sliced_ds_hist] if sliced_ds_hist else [sliced_ds_future])
+    )
 
     return combined_ds
+
+
+# def load_and_combine_variables(
+#     variables, level, lat_range, lon_range, start_year, end_year
+# ):
+
+#     # Handle historical data if start_year is before 2015
+#     if start_year < 2015:
+#         sliced_ds_hist = xr.Dataset()
+#         hist_end_year = min(
+#             end_year, 2014
+#         )  # Ensure historical data goes up to 2014 at most
+#         for variable in variables:
+#             file_paths = generate_file_paths_future(
+#                 variable,
+#                 start_year,
+#                 hist_end_year,
+#             )
+#             data_var = load_preprocess_variable(
+#                 file_paths, variable, level - 1, lat_range, lon_range
+#             )
+#             if variable in ["ua", "va"]:
+#                 # Let's assume hus and ta have the target longitude values, and they are already loaded
+#                 target_lon = (
+#                     sliced_ds_hist.lon if "lon" in sliced_ds_hist else data_var.lon
+#                 )
+#                 target_lat = (
+#                     sliced_ds_hist.lat if "lat" in sliced_ds_hist else data_var.lat
+#                 )
+#                 target_lev = (
+#                     sliced_ds_hist.lev if "lev" in sliced_ds_hist else data_var.lev
+#                 )
+#                 # Check if va coordinates are different before interpolation
+#                 if not data_var.lat.equals(target_lat):
+#                     data_var = data_var.interp(
+#                         lat=target_lat,
+#                         method="linear",
+#                         kwargs={"fill_value": "extrapolate"},
+#                     )
+#                 if not data_var.lon.equals(target_lon):
+#                     data_var = data_var.interp(
+#                         lon=target_lon,
+#                         method="linear",
+#                         kwargs={"fill_value": "extrapolate"},
+#                     )
+#                 # Assign the adjusted longitude values to ua or va
+#                 data_var = data_var.assign_coords(
+#                     lon=target_lon, lat=target_lat, lev=target_lev
+#                 )
+#             # datasets_list.append(data_var)
+#             sliced_ds_hist[variable] = data_var
+
+#     # Handle future data if end_year is 2015 or later
+#     if end_year >= 2015:
+#         sliced_ds_future = xr.Dataset()
+#         future_start_year = max(
+#             start_year, 2015
+#         )  # Start from 2015 or the start_year if it's later
+#         for variable in variables:
+#             file_paths = generate_file_paths_future(
+#                 variable,
+#                 future_start_year,
+#                 end_year,
+#             )
+#             data_var = load_preprocess_variable(
+#                 file_paths, variable, level - 1, lat_range, lon_range
+#             )
+#             if variable in ["ua", "va"]:
+#                 # Let's assume hus and ta have the target longitude values, and they are already loaded
+#                 target_lon = (
+#                     sliced_ds_future.lon if "lon" in sliced_ds_future else data_var.lon
+#                 )
+#                 target_lat = (
+#                     sliced_ds_future.lat if "lat" in sliced_ds_future else data_var.lat
+#                 )
+#                 target_lev = (
+#                     sliced_ds_future.lev if "lev" in sliced_ds_future else data_var.lev
+#                 )
+#                 # Check if va coordinates are different before interpolation
+#                 if not data_var.lat.equals(target_lat):
+#                     data_var = data_var.interp(
+#                         lat=target_lat,
+#                         method="linear",
+#                         kwargs={"fill_value": "extrapolate"},
+#                     )
+#                 if not data_var.lon.equals(target_lon):
+#                     data_var = data_var.interp(
+#                         lon=target_lon,
+#                         method="linear",
+#                         kwargs={"fill_value": "extrapolate"},
+#                     )
+#                 # Assign the adjusted longitude values to ua or va
+#                 data_var = data_var.assign_coords(
+#                     lon=target_lon, lat=target_lat, lev=target_lev
+#                 )
+#             # Check for variable adjustments (e.g., for 'ua', 'va') and apply if necessary
+#             # datasets_list.append(data_var)
+#             sliced_ds_future[variable] = data_var
+
+#     # Ensure datasets are pre-chunked before combining
+#     sliced_ds_hist = sliced_ds_hist.chunk({"time": 1000, "lat": -1, "lon": -1})
+#     sliced_ds_future = sliced_ds_future.chunk({"time": 1000, "lat": -1, "lon": -1})
+
+#     # Combine all loaded datasets into one, handling level, latitude, and longitude adjustments as needed
+#     combined_ds = xr.combine_by_coords([sliced_ds_hist, sliced_ds_future])
+
+#     # Optionally, rename variables if needed
+#     # rename_dict = {"hus": "q", "ta": "t", "ua": "u", "va": "v"}
+#     # combined_ds = combined_ds.rename(rename_dict)
+
+#     return combined_ds
 
 
 # def generate_file_paths(

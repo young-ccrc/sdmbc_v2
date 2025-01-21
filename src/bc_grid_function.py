@@ -37,8 +37,8 @@ from data_preparation import (
 from sdmbc_bc_function import (
     bc_correction_future,
     bc_correction_hist,
-    bc_correction_with_rescaling,
     empirical_quantile_mapping_future_xarray,
+    quantile_mapping_rescale_all,
     rescale_to_sum_one,
 )
 
@@ -128,7 +128,16 @@ def process_grid_cell_future(lat, lon, reshaped_gcm, bc_params_array):
         dict: Contains bias-corrected GCM data for the future period.
     """
     gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
-    params_data = bc_params_array.sel(lat=lat, lon=lon)
+
+    # Find the nearest latitude and longitude indices in reshaped_gcm_delayed_f
+    lat_array = reshaped_gcm.lat.values
+    lon_array = reshaped_gcm.lon.values
+
+    lat_idx = (np.abs(lat_array - lat)).argmin()  # Index of the nearest latitude
+    lon_idx = (np.abs(lon_array - lon)).argmin()  # Index of the nearest longitude
+
+    # Select the corresponding value in bc_params_array_loaded
+    params_data = bc_params_array[lat_idx, lon_idx]
     # Apply the correction
     gcmc_corrected = correction_wrapper_future(gcm_data, params_data)
 
@@ -154,12 +163,10 @@ def rescale_and_reformat(gcmc_corrected, ff_gcm, ff_obs):
     """
     # Rescale and Reformat using Fraction Factors and Sliced GCM Data
     if config.sub_daily_correction:
-        gcm_corrected = bc_correction_with_rescaling(
-            ff_obs, ff_gcm, var_list_w, n_quantiles=100, extrapolation="constant"
-        )
+        ff_corrected = quantile_mapping_rescale_all(ff_obs, ff_gcm)
         six_hourly_data_hist = daily_to_6hourly_xr(
             gcmc_corrected,
-            gcm_corrected,
+            ff_corrected,
             var_list_w,
             config.startyear_h,
             config.endyear_h,
@@ -322,11 +329,11 @@ def process_tile(
         # sliced_gcm = sliced_gcm_all[0]
         assign_gcm = assign_w_6hr(sliced_gcm, config.bc_boundary)
         daily_gcm, fraction_factors_gcm = convert_to_daily_with_fraction(assign_gcm)
-        daily_gcm = daily_gcm.chunk({"time": 1000, "lat": "auto", "lon": "auto"})
+        # daily_gcm = daily_gcm.chunk({"time": 1000, "lat": "auto", "lon": "auto"})
         # daily_gcm_rechunk = daily_gcm.chunk({"time": 1000, "lat": -1, "lon": -1})
-        fraction_factors_gcm = fraction_factors_gcm.chunk(
-            {"time": 1000, "lat": "auto", "lon": "auto"}
-        )
+        # fraction_factors_gcm = fraction_factors_gcm.chunk(
+        #     {"time": 1000, "lat": "auto", "lon": "auto"}
+        # )
     else:
         daily_gcm = sliced_gcm
 
@@ -359,15 +366,20 @@ def process_tile(
         obs_var = xr.open_dataset(obs_file)[var_name]  # Load the variable from the file
         sliced_obs[var_name] = obs_var  # Add it to the observational dataset
 
+    sliced_obs = sliced_obs.sel(
+        lat=slice(sliced_gcm.lat.min().item(), sliced_gcm.lat.max().item()),
+        lon=slice(sliced_gcm.lon.min().item(), sliced_gcm.lon.max().item()),
+    )
+
     if config.bc_boundary == "lateral":
         # sliced_obs = sliced_obs_all[0]
         assign_obs = assign_w_6hr(sliced_obs, config.bc_boundary)
         daily_obs, fraction_factors_obs = convert_to_daily_with_fraction(assign_obs)
-        daily_obs = daily_obs.chunk({"time": 1000, "lat": "auto", "lon": "auto"})
+        # daily_obs = daily_obs.chunk({"time": 1000, "lat": "auto", "lon": "auto"})
         # daily_obs_rechunk = daily_obs.chunk({"time": 1000, "lat": -1, "lon": -1})
-        fraction_factors_obs = fraction_factors_obs.chunk(
-            {"time": 1000, "lat": "auto", "lon": "auto"}
-        )
+        # fraction_factors_obs = fraction_factors_obs.chunk(
+        #     {"time": 1000, "lat": "auto", "lon": "auto"}
+        # )
     else:
         daily_obs = sliced_obs
 
@@ -450,8 +462,27 @@ def preprocess_and_save_obs(
     if not os.path.exists(temp_file):
         # Preprocess the observational data
         obs_ds = xr.open_mfdataset(
-            file_paths, combine="by_coords", chunks={"time": 1000, "lat": -1, "lon": -1}
+            file_paths,
+            combine="by_coords",
+            chunks={"time": "auto", "lat": "auto", "lon": "auto"},
         )
+        # Apply nearest logic to longitude
+        # lon_values = obs_ds.lon.values
+        # lat_values = obs_ds.lat.values
+        # nearest_lat_min = lat_values[np.abs(lat_values - lat_range[0]).argmin()]
+        # nearest_lat_max = lat_values[np.abs(lat_values - lat_range[1]).argmin()]
+        # nearest_lon_min = lon_values[np.abs(lon_values - lon_range[0]).argmin()]
+        # nearest_lon_max = lon_values[np.abs(lon_values - lon_range[1]).argmin()]
+
+        # obs_ds_sel = (
+        #     obs_ds[var_name]
+        #     .isel(lev=level_index)
+        #     .sel(
+        #         lat=slice(nearest_lat_min, nearest_lat_max),
+        #         lon=slice(nearest_lon_min, nearest_lon_max),
+        #         time=slice(f"{startyear_h}-01-01", f"{endyear_h}-12-31"),
+        #     )
+        # )
         obs_ds_sel = (
             obs_ds[var_name]
             .isel(lev=level_index)
@@ -884,6 +915,59 @@ def bc_correction_grid_cell_future_daily_dask(
 
     # Compute all delayed tasks in parallel
     final_corrected_data = dask.compute(bc_corrected_6hourly_data)
+
+    return final_corrected_data[0]
+
+
+def bc_correction_grid_cell_future_daily_dask_2d(
+    gcm_future,
+    bc_params_array,
+    startyear_f,
+    endyear_f,
+    variable,
+):
+
+    tasks = [
+        dask.delayed(process_grid_cell_future)(lat, lon, gcm_future, bc_params_array)
+        for lat, lon in itertools.product(gcm_future.lat.values, gcm_future.lon.values)
+    ]
+    print("compute tasks")
+    # Compute all tasks in parallel at the end
+    results = dask.compute(*tasks)
+    print("tasks done")
+    # Initialize arrays to hold the final data
+    corrected_data = {
+        var: np.empty((31, 12, 31, len(gcm_future.lat), len(gcm_future.lon)))
+        for var in variable
+    }
+
+    # Fill the arrays with data from results
+    for result in results:
+        lat_idx = np.where(gcm_future.lat.values == result["lat"])[0][0]
+        lon_idx = np.where(gcm_future.lon.values == result["lon"])[0][0]
+        for i, var in enumerate(variable):
+            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+
+    # Convert to Xarray Dataset
+    gcmc_corrected = xr.Dataset(
+        {
+            var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
+            for var in variable
+        },
+        coords={
+            "year": gcm_future.year,
+            "month": gcm_future.month,
+            "day": gcm_future.day,
+            "lat": gcm_future.lat,
+            "lon": gcm_future.lon,
+        },
+    )
+    print("align")
+    # Align the daily data with the generated dates
+    daily_data_aligned = align_daily_data_xr(gcmc_corrected, startyear_f)
+
+    # Compute all delayed tasks in parallel
+    final_corrected_data = dask.compute(daily_data_aligned)
 
     return final_corrected_data[0]
 
