@@ -81,9 +81,7 @@ def correction_wrapper_future(gcm_data, bc_params_array):
         array-like: Bias-corrected future GCM data.
     """
     grid_cell_gcm = np.stack(gcm_data, axis=0)  # Shape should be (3, 31, 12, 31)
-    result_dict = bc_correction_future(
-        grid_cell_gcm, bc_params_array, config.startyear_f, config.endyear_f
-    )
+    result_dict = bc_correction_future(grid_cell_gcm, bc_params_array)
     return result_dict["gcmc"]
 
 
@@ -739,90 +737,90 @@ def bc_correction_grid_cell_hist_dask_2d(
     return final_corrected_data[0], final_corrected_data[1]
 
 
-def bc_correction_grid_cell_future_subdaily_dask(
-    ff_gcm,
-    ff_obs,
-    gcm_future,
-    ff_gcm_future,
-    bc_params_array,
-    startyear_f,
-    endyear_f,
-    var_list_w,
-    sliced_gcm_future,
-):
-    """
-    Perform sub-daily bias correction for future GCM data across all grid cells in parallel using Dask.
+# def bc_correction_grid_cell_future_subdaily_dask(
+#     ff_gcm,
+#     ff_obs,
+#     gcm_future,
+#     ff_gcm_future,
+#     bc_params_array,
+#     startyear_f,
+#     endyear_f,
+#     var_list_w,
+#     sliced_gcm_future,
+# ):
+#     """
+#     Perform sub-daily bias correction for future GCM data across all grid cells in parallel using Dask.
 
-    Args:
-        ff_gcm, ff_obs: Fraction factors for GCM and observational data.
-        gcm_future (xarray.Dataset): GCM data for future period.
-        ff_gcm_future: Fraction factors for future GCM data.
-        bc_params_array: Bias correction parameters.
-        startyear_f (int): Start year of the future period.
-        endyear_f (int): End year of the future period.
-        var_list_w (list of str): List of variable names to be corrected.
-        sliced_gcm_future (xarray.Dataset): Sliced GCM data.
+#     Args:
+#         ff_gcm, ff_obs: Fraction factors for GCM and observational data.
+#         gcm_future (xarray.Dataset): GCM data for future period.
+#         ff_gcm_future: Fraction factors for future GCM data.
+#         bc_params_array: Bias correction parameters.
+#         startyear_f (int): Start year of the future period.
+#         endyear_f (int): End year of the future period.
+#         var_list_w (list of str): List of variable names to be corrected.
+#         sliced_gcm_future (xarray.Dataset): Sliced GCM data.
 
-    Returns:
-        xarray.Dataset: Bias-corrected six-hourly GCM data for the future.
-    """
+#     Returns:
+#         xarray.Dataset: Bias-corrected six-hourly GCM data for the future.
+#     """
 
-    # Generate tasks for each grid cell
-    tasks = [
-        process_grid_cell_future(lat, lon, gcm_future, bc_params_array)
-        for lat, lon in itertools.product(gcm_future.lat.values, gcm_future.lon.values)
-    ]
+#     # Generate tasks for each grid cell
+#     tasks = [
+#         process_grid_cell_future(lat, lon, gcm_future, bc_params_array)
+#         for lat, lon in itertools.product(gcm_future.lat.values, gcm_future.lon.values)
+#     ]
 
-    # Compute all tasks in parallel at the end
-    results = dask.compute(*tasks)
+#     # Compute all tasks in parallel at the end
+#     results = dask.compute(*tasks)
 
-    # Initialize arrays to hold the final data
-    corrected_data = {
-        var: np.empty((31, 12, 31, len(gcm_future.lat), len(gcm_future.lon)))
-        for var in var_list_w
-    }
+#     # Initialize arrays to hold the final data
+#     corrected_data = {
+#         var: np.empty((31, 12, 31, len(gcm_future.lat), len(gcm_future.lon)))
+#         for var in var_list_w
+#     }
 
-    # Flatten the list of results
-    flattened_results = [item for sublist in results for item in sublist]
+#     # Flatten the list of results
+#     flattened_results = [item for sublist in results for item in sublist]
 
-    # Fill the arrays with data from results
-    for result in flattened_results:
-        lat_idx = np.where(gcm_future.lat.values == result["lat"])[0][0]
-        lon_idx = np.where(gcm_future.lon.values == result["lon"])[0][0]
-        for i, var in enumerate(var_list_w):
-            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+#     # Fill the arrays with data from results
+#     for result in flattened_results:
+#         lat_idx = np.where(gcm_future.lat.values == result["lat"])[0][0]
+#         lon_idx = np.where(gcm_future.lon.values == result["lon"])[0][0]
+#         for i, var in enumerate(var_list_w):
+#             corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
 
-    # Convert to Xarray Dataset
-    gcmc_corrected = xr.Dataset(
-        {
-            var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
-            for var in var_list_w
-        },
-        coords={
-            "year": gcm_future.year,
-            "month": gcm_future.month,
-            "day": gcm_future.day,
-            "lat": gcm_future.lat,
-            "lon": gcm_future.lon,
-        },
-    )
+#     # Convert to Xarray Dataset
+#     gcmc_corrected = xr.Dataset(
+#         {
+#             var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
+#             for var in var_list_w
+#         },
+#         coords={
+#             "year": gcm_future.year,
+#             "month": gcm_future.month,
+#             "day": gcm_future.day,
+#             "lat": gcm_future.lat,
+#             "lon": gcm_future.lon,
+#         },
+#     )
 
-    six_hourly_data = rescale_and_reformat_future(
-        gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future
-    )
+#     six_hourly_data = rescale_and_reformat_future(
+#         gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future
+#     )
 
-    # g_u = sliced_gcm_future.ua.sel(time=slice(str(startyear_f), str(endyear_f)))
-    # g_v = sliced_gcm_future.va.sel(time=slice(str(startyear_f), str(endyear_f)))
-    # six_hourly_data = six_hourly_data.sel(time=slice(str(startyear_f), str(endyear_f)))
+#     # g_u = sliced_gcm_future.ua.sel(time=slice(str(startyear_f), str(endyear_f)))
+#     # g_v = sliced_gcm_future.va.sel(time=slice(str(startyear_f), str(endyear_f)))
+#     # six_hourly_data = six_hourly_data.sel(time=slice(str(startyear_f), str(endyear_f)))
 
-    bc_corrected_6hourly_data = apply_boundary_correction(
-        six_hourly_data, sliced_gcm_future
-    )
+#     bc_corrected_6hourly_data = apply_boundary_correction(
+#         six_hourly_data, sliced_gcm_future
+#     )
 
-    # Compute all delayed tasks in parallel
-    final_corrected_data = dask.compute(bc_corrected_6hourly_data)
+#     # Compute all delayed tasks in parallel
+#     final_corrected_data = dask.compute(bc_corrected_6hourly_data)
 
-    return final_corrected_data[0]
+#     return final_corrected_data[0]
 
 
 def bc_correction_grid_cell_future_daily_dask(
@@ -919,7 +917,7 @@ def bc_correction_grid_cell_future_daily_dask(
     return final_corrected_data[0]
 
 
-def bc_correction_grid_cell_future_daily_dask_2d(
+def bc_correction_grid_cell_future_dask_2d(
     gcm_future,
     bc_params_array,
     startyear_f,

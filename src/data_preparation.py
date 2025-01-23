@@ -971,17 +971,17 @@ def convert_6hr_to_original_xr(bias_corrected_data_xr, g_u_xr, g_v_xr):
     return converted_data_xr
 
 
-def determine_tiles(file_paths, var, lat_min, lat_max, lon_min, lon_max):
+def determine_tiles(ds_tile, lat_min, lat_max, lon_min, lon_max):
     """
     Determines the number of tiles based on the total number of grid points.
 
     Args:
-        file_paths_by_variable_obs (dict): Dictionary of variable names and their corresponding file paths.
+        ds_tile (Dataset): Xarray Dataset.
 
     Returns:
         (int, int): Number of tiles for latitude and longitude.
     """
-    ds_tile = xr.open_dataset(file_paths[var][0])
+    # ds_tile = xr.open_dataset(file_paths[var][0])
     max_tile_size = 300
     # Use the first variable's file paths to determine grid size
     ds_tile = ds_tile.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
