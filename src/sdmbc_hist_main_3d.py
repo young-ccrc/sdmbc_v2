@@ -5,6 +5,7 @@ import shutil
 import sys
 import time  # Import the time module
 import warnings
+from types import SimpleNamespace
 
 # import dask  # type: ignore
 import numpy as np  # type: ignore
@@ -16,14 +17,14 @@ from tqdm import tqdm  # type: ignore
 
 # import yaml  # type: ignore
 from bc_grid_function import preprocess_and_save_obs  # type: ignore
-from bc_grid_function import process_tile
+from bc_grid_function import process_tile, process_tile_future  # type: ignore
 from config import config  # type: ignore
 
 # from data_preparation import   # type: ignore
 from data_preparation import (
-    assign_w_day,
     determine_tiles,
     generate_file_paths,
+    generate_file_paths_future,
     generate_file_paths_obs,
     validate_inputs,
 )
@@ -110,6 +111,10 @@ def split_domain(lat_min, lat_max, lon_min, lon_max, n_lat_tiles, n_lon_tiles):
     return tiles
 
 
+def dict_to_simplenamespace(d):
+    return SimpleNamespace(**d)
+
+
 def main(config):
 
     setup_client()
@@ -136,6 +141,20 @@ def main(config):
     version = config.version
     upper_limit = config.upper_limit
     lower_limit = config.lower_limit
+
+    # Validate inputs
+    if config.bc_future:
+        bc_future_path = config.bc_future_path
+        startyear_f = config.startyear_f
+        endyear_f = config.endyear_f
+        infor_f = config.infor_f
+        gname_f = config.gname_f
+        period_f = config.period_f
+        cinfor_f = config.cinfor_f
+        sinfor_f = config.sinfor_f
+        version_f = config.version_f
+        scenario = config.scenario
+        cinfor_f = config.cinfor_f
 
     # Validate inputs
     validate_inputs(lat_min, lat_max)
@@ -192,9 +211,6 @@ def main(config):
         file_paths_by_variable_obs, variables[0], lat_min, lat_max, lon_min, lon_max
     )
 
-    temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{slevel}_{elevel}")
-    os.makedirs(temp_dir, exist_ok=True)
-
     print("start dask bc correction")
 
     tiles = split_domain(
@@ -211,46 +227,252 @@ def main(config):
         start_time = time.time()
 
         print(f"Starting processing for level {level}")
-        # To store all bc_params for later concatenation
-        all_bc_params = []
-        # for idx, tile in enumerate(tiles):
-        for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
-            for var_name, file_paths in file_paths_by_variable_obs.items():
-                temp_netcdf = preprocess_and_save_obs(
-                    tile,
-                    file_paths,
-                    temp_dir,
-                    var_name,
-                    level,
-                    lat_min,
-                    lat_max,
-                    lon_min,
-                    lon_max,
-                    startyear_h,
-                    endyear_h,
+
+        if config.bc_hist:
+
+            temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{slevel}_{elevel}")
+            os.makedirs(temp_dir, exist_ok=True)
+
+            # To store all bc_params for later concatenation
+            all_bc_params = []
+            # for idx, tile in enumerate(tiles):
+            for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
+                for var_name, file_paths in file_paths_by_variable_obs.items():
+                    temp_netcdf = preprocess_and_save_obs(
+                        tile,
+                        file_paths,
+                        temp_dir,
+                        var_name,
+                        level,
+                        lat_min,
+                        lat_max,
+                        lon_min,
+                        lon_max,
+                        startyear_h,
+                        endyear_h,
+                    )
+
+                try:
+                    # Define output file paths
+                    output_file = f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+                    output_params = f"{temp_dir}/bc_params_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.npy"
+
+                    # # Check if both output files already exist
+                    # if os.path.exists(output_file) and os.path.exists(output_params):
+                    #     print(
+                    #         f"Both output file and params for tile {idx}, level {level} already exist. Skipping..."
+                    #     )
+                    #     continue  # Skip processing this tile
+
+                    # Process the tile if either output is missing
+                    print(f"Processing tile {idx}, level {level}...")
+                    bc_corrected_gcm_hist_tile, bc_params_tile = process_tile(
+                        tile,
+                        variables,
+                        file_paths_by_variable_gcm,
+                        level,
+                        config,
+                        temp_dir,
+                    )
+
+                    # Save the bias-corrected output
+                    if not os.path.exists(output_file):
+                        print(
+                            f"Saving 3D output for tile {idx}, level {level} to {output_file}"
+                        )
+                        bc_corrected_gcm_hist_tile.compute().to_netcdf(output_file)
+                    else:
+                        print(f"File {output_file} already exists. Skipping...")
+
+                    # Save the bias-correction parameters
+                    if not os.path.exists(output_params):
+                        print(
+                            f"Saving 3D params for tile {idx}, level {level} to {output_params}"
+                        )
+                        np.save(output_params, bc_params_tile)
+                    else:
+                        print(f"File {output_params} already exists. Skipping...")
+                        # continue
+
+                    # Accumulate bc_params_tile for later concatenation
+                    all_bc_params.append(bc_params_tile)
+
+                    # Free memory after saving each tile
+                    del bc_corrected_gcm_hist_tile
+                    # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
+
+                except Exception as e:
+                    print(f"Error processing tile {idx}: {e}")
+                    # continue
+
+            # Concatenate all bc_params along the latitude and longitude
+            # Initialize an empty list to hold rows of tiles for each latitude band
+            lat_band_tiles = []
+
+            # Step 2: Iterate over the tiles and organize by rows
+            for i in range(0, len(all_bc_params), n_lon_tiles):
+                # Extract a row of tiles (all tiles in the same latitude band)
+                row_tiles = all_bc_params[i : i + n_lon_tiles]
+
+                # Concatenate the row of tiles along the longitude (axis=1)
+                lat_band = np.concatenate(row_tiles, axis=1)
+
+                # Add the concatenated latitude band to the list
+                lat_band_tiles.append(lat_band)
+
+            # Concatenate all latitude bands along the latitude (axis=0)
+            full_param_array = np.concatenate(lat_band_tiles, axis=0)
+
+            # Load the bias-corrected tiles and combine them into a single dataset
+            tile_files = [
+                f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+                for idx, tile in enumerate(tiles)
+            ]
+            full_bc_corrected = xr.open_mfdataset(
+                tile_files, combine="by_coords"
+            )  # Combine by matching coordinates
+
+            # Extract the original latitude and longitude values (with duplicates)
+            original_lat_values = full_bc_corrected["lat"].values
+            original_lon_values = full_bc_corrected["lon"].values
+
+            # Identify indices of duplicate values and determine which to remove
+            # Identify duplicated latitudes and keep only the first occurrence
+            _, lat_unique_indices = np.unique(original_lat_values, return_index=True)
+            # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
+            lat_indices_to_remove = np.setdiff1d(
+                np.arange(len(original_lat_values)), lat_unique_indices
+            )
+
+            # Identify duplicated longitudes and keep only the first occurrence
+            _, lon_unique_indices = np.unique(original_lon_values, return_index=True)
+            # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
+            lon_indices_to_remove = np.setdiff1d(
+                np.arange(len(original_lon_values)), lon_unique_indices
+            )
+
+            # Remove duplicate rows and columns from the full parameter array
+            # Assuming full_param_array has shape (146, 193) that includes duplicated values
+            full_param_array_corrected = np.delete(
+                full_param_array, lat_indices_to_remove, axis=0
+            )  # Remove the duplicate latitude rows
+            full_param_array_corrected = np.delete(
+                full_param_array_corrected, lon_indices_to_remove, axis=1
+            )  # Remove the duplicate longitude columns
+
+            # Remove duplicate rows and columns from the full_bc_corrected dataset
+            full_bc_corrected = full_bc_corrected.drop_duplicates(
+                "lat"
+            ).drop_duplicates("lon")
+
+            # Define the list of variables to be adjusted based on the limits
+            # Assume order corresponds to limits in `config.yaml`
+            variables_to_limit = ["w", "ta", "hus", "tos"]
+
+            for var_name, lower, upper in zip(
+                variables_to_limit, lower_limit, upper_limit
+            ):
+                if var_name in full_bc_corrected:
+                    if var_name == "hus":
+                        lower = lower / 1000
+                        upper = upper / 1000
+                    # Apply the limits to the variable by masking values outside of the range
+                    full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
+                        (full_bc_corrected[var_name] > lower),
+                        lower,
+                    )
+                    full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
+                        (full_bc_corrected[var_name] < upper),
+                        upper,
+                    )
+
+            full_bc_corrected["time"].attrs.update(
+                {
+                    "standard_name": "time",
+                    "long_name": "time",
+                }
+            )
+
+            # Check and correct the attributes of lat and lon
+            full_bc_corrected["lat"].attrs.update(
+                {
+                    "standard_name": "latitude",
+                    "long_name": "latitude",
+                    "units": "degrees_north",
+                    "axis": "Y",
+                }
+            )
+
+            full_bc_corrected["lon"].attrs.update(
+                {
+                    "standard_name": "longitude",
+                    "long_name": "longitude",
+                    "units": "degrees_east",
+                    "axis": "X",
+                }
+            )
+
+            # Ensure these attributes are properly set for each variable
+            m_names = ["M", "MSD", "NBC", "MBC"]
+            for var in full_bc_corrected.data_vars:
+                full_bc_corrected[var].attrs.update(
+                    {
+                        "description": f"bias-corrected data, {m_names[int(config.correction_model)-1]}, SDMBCv2",
+                        "history": "Created by applying SDMBCv2 package",
+                    }
                 )
 
-            try:
+            if "lev" not in full_bc_corrected.dims:
+                full_bc_corrected = full_bc_corrected.expand_dims(
+                    lev=[full_bc_corrected.lev.values]
+                )
+            full_bc_corrected = full_bc_corrected.transpose("time", "lev", "lat", "lon")
+
+            print("save the bc model")
+            full_bc_corrected = full_bc_corrected.astype("float32")  # save as float32
+
+            # Save the BC model
+            np.save(
+                f"{out_path}/bc_params_3d_{period}_lev_{level}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
+                full_param_array_corrected,
+            )
+
+            if config.save_bc_output:
+                full_bc_corrected.load().to_netcdf(
+                    f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+                )
+
+        if config.bc_future:
+
+            temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{slevel}_{elevel}")
+            os.makedirs(temp_dir, exist_ok=True)
+
+            for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
+                # try:
+                if config.bc_hist == False:
+                    for var_name, file_paths in file_paths_by_variable_obs.items():
+                        temp_netcdf = preprocess_and_save_obs(
+                            tile,
+                            file_paths,
+                            temp_dir,
+                            var_name,
+                            level,
+                            lat_min,
+                            lat_max,
+                            lon_min,
+                            lon_max,
+                            startyear_h,
+                            endyear_h,
+                        )
                 # Define output file paths
-                output_file = f"{temp_dir}/bc_corrected_tile_3d_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
-                output_params = f"{temp_dir}/bc_params_tile_3d_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.npy"
+                output_file = f"{temp_dir}/bc_corrected_tile_3d_{period_f}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
 
-                # # Check if both output files already exist
-                # if os.path.exists(output_file) and os.path.exists(output_params):
-                #     print(
-                #         f"Both output file and params for tile {idx}, level {level} already exist. Skipping..."
-                #     )
-                #     continue  # Skip processing this tile
-
-                # Process the tile if either output is missing
-                print(f"Processing tile {idx}, level {level}...")
-                bc_corrected_gcm_hist_tile, bc_params_tile = process_tile(
+                bc_corrected_gcm_future_tile = process_tile_future(
                     tile,
                     variables,
-                    file_paths_by_variable_gcm,
-                    file_paths_by_variable_obs,
                     level,
                     config,
+                    file_paths_by_variable_gcm,
                     temp_dir,
                 )
 
@@ -259,193 +481,103 @@ def main(config):
                     print(
                         f"Saving 3D output for tile {idx}, level {level} to {output_file}"
                     )
-                    bc_corrected_gcm_hist_tile.compute().to_netcdf(output_file)
+                    bc_corrected_gcm_future_tile.compute().to_netcdf(output_file)
                 else:
                     print(f"File {output_file} already exists. Skipping...")
 
-                # Save the bias-correction parameters
-                if not os.path.exists(output_params):
-                    print(
-                        f"Saving 3D params for tile {idx}, level {level} to {output_params}"
-                    )
-                    np.save(output_params, bc_params_tile)
-                else:
-                    print(f"File {output_params} already exists. Skipping...")
-                    # continue
-                # bc_corrected_gcm_hist_tile.compute().to_netcdf(
-                #     output_file
-                # )  # Save tile result
-
-                # Accumulate bc_params_tile for later concatenation
-                all_bc_params.append(bc_params_tile)
-
                 # Free memory after saving each tile
-                del bc_corrected_gcm_hist_tile
+                del bc_corrected_gcm_future_tile
                 # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
 
-            except Exception as e:
-                print(f"Error processing tile {idx}: {e}")
-                # continue
+                # except Exception as e:
+                #     print(f"Error processing tile {idx}: {e}")
+                #     # continue
 
-        # Concatenate all bc_params along the latitude and longitude
-        # Initialize an empty list to hold rows of tiles for each latitude band
-        lat_band_tiles = []
+            # Load the bias-corrected tiles and combine them into a single dataset
+            tile_files = [
+                f"{temp_dir}/bc_corrected_tile_3d_{period_f}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+                for idx, tile in enumerate(tiles)
+            ]
+            full_bc_corrected = xr.open_mfdataset(
+                tile_files, combine="by_coords"
+            )  # Combine by matching coordinates
 
-        # Step 2: Iterate over the tiles and organize by rows
-        for i in range(0, len(all_bc_params), n_lon_tiles):
-            # Extract a row of tiles (all tiles in the same latitude band)
-            row_tiles = all_bc_params[i : i + n_lon_tiles]
+            # Remove duplicate rows and columns from the full_bc_corrected dataset
+            full_bc_corrected = full_bc_corrected.drop_duplicates(
+                "lat"
+            ).drop_duplicates("lon")
 
-            # Concatenate the row of tiles along the longitude (axis=1)
-            lat_band = np.concatenate(row_tiles, axis=1)
+            # Define the list of variables to be adjusted based on the limits
+            # Assume order corresponds to limits in `config.yaml`
+            variables_to_limit = ["w", "ta", "hus", "tos"]
 
-            # Add the concatenated latitude band to the list
-            lat_band_tiles.append(lat_band)
+            for var_name, lower, upper in zip(
+                variables_to_limit, lower_limit, upper_limit
+            ):
+                if var_name in full_bc_corrected:
+                    if var_name == "hus":
+                        lower = lower / 1000
+                        upper = upper / 1000
+                    # Apply the limits to the variable by masking values outside of the range
+                    full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
+                        (full_bc_corrected[var_name] > lower),
+                        lower,
+                    )
+                    full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
+                        (full_bc_corrected[var_name] < upper),
+                        upper,
+                    )
 
-        # Concatenate all latitude bands along the latitude (axis=0)
-        full_param_array = np.concatenate(lat_band_tiles, axis=0)
+            full_bc_corrected["time"].attrs.update(
+                {
+                    "standard_name": "time",
+                    "long_name": "time",
+                }
+            )
 
-        # Load the bias-corrected tiles and combine them into a single dataset
-        tile_files = [
-            f"{temp_dir}/bc_corrected_tile_3d_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
-            for idx, tile in enumerate(tiles)
-        ]
-        full_bc_corrected = xr.open_mfdataset(
-            tile_files, combine="by_coords"
-        )  # Combine by matching coordinates
+            # Check and correct the attributes of lat and lon
+            full_bc_corrected["lat"].attrs.update(
+                {
+                    "standard_name": "latitude",
+                    "long_name": "latitude",
+                    "units": "degrees_north",
+                    "axis": "Y",
+                }
+            )
 
-        # Extract the original latitude and longitude values (with duplicates)
-        original_lat_values = full_bc_corrected["lat"].values
-        original_lon_values = full_bc_corrected["lon"].values
+            full_bc_corrected["lon"].attrs.update(
+                {
+                    "standard_name": "longitude",
+                    "long_name": "longitude",
+                    "units": "degrees_east",
+                    "axis": "X",
+                }
+            )
 
-        # Identify indices of duplicate values and determine which to remove
-        # Identify duplicated latitudes and keep only the first occurrence
-        _, lat_unique_indices = np.unique(original_lat_values, return_index=True)
-        # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
-        lat_indices_to_remove = np.setdiff1d(
-            np.arange(len(original_lat_values)), lat_unique_indices
-        )
-
-        # Identify duplicated longitudes and keep only the first occurrence
-        _, lon_unique_indices = np.unique(original_lon_values, return_index=True)
-        # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
-        lon_indices_to_remove = np.setdiff1d(
-            np.arange(len(original_lon_values)), lon_unique_indices
-        )
-
-        # Remove duplicate rows and columns from the full parameter array
-        # Assuming full_param_array has shape (146, 193) that includes duplicated values
-        full_param_array_corrected = np.delete(
-            full_param_array, lat_indices_to_remove, axis=0
-        )  # Remove the duplicate latitude rows
-        full_param_array_corrected = np.delete(
-            full_param_array_corrected, lon_indices_to_remove, axis=1
-        )  # Remove the duplicate longitude columns
-
-        # Remove duplicate rows and columns from the full_bc_corrected dataset
-        full_bc_corrected = full_bc_corrected.drop_duplicates("lat").drop_duplicates(
-            "lon"
-        )
-
-        # # Assuming `full_bc_corrected` has variables like 'wind_speed', 'temperature', 'specific_humidity', 'sst'
-        # variable_names = list(full_bc_corrected.data_vars)  # Get the names of the variables in the dataset
-
-        # Define the list of variables to be adjusted based on the limits
-        # Assume order corresponds to limits in `config.yaml`
-        variables_to_limit = ["w", "ta", "hus", "tos"]
-
-        for var_name, lower, upper in zip(variables_to_limit, lower_limit, upper_limit):
-            if var_name in full_bc_corrected:
-                if var_name == "hus":
-                    lower = lower / 1000
-                    upper = upper / 1000
-                # Apply the limits to the variable by masking values outside of the range
-                full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
-                    (full_bc_corrected[var_name] > lower),
-                    lower,
-                )
-                full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
-                    (full_bc_corrected[var_name] < upper),
-                    upper,
-                )
-
-        full_bc_corrected["time"].attrs.update(
-            {
-                "standard_name": "time",
-                "long_name": "time",
-            }
-        )
-
-        # Check and correct the attributes of lat and lon
-        full_bc_corrected["lat"].attrs.update(
-            {
-                "standard_name": "latitude",
-                "long_name": "latitude",
-                "units": "degrees_north",
-                "axis": "Y",
-            }
-        )
-
-        full_bc_corrected["lon"].attrs.update(
-            {
-                "standard_name": "longitude",
-                "long_name": "longitude",
-                "units": "degrees_east",
-                "axis": "X",
-            }
-        )
-
-        # Ensure these attributes are properly set for each variable
-        m_names = ["M", "MSD", "NBC", "MBC"]
-        for var in full_bc_corrected.data_vars:
-            if bc_boundary == "lateral":
+            # Ensure these attributes are properly set for each variable
+            m_names = ["M", "MSD", "NBC", "MBC"]
+            for var in full_bc_corrected.data_vars:
                 full_bc_corrected[var].attrs.update(
                     {
                         "description": f"bias-corrected data, {m_names[int(config.correction_model)-1]}, SDMBCv2",
                         "history": "Created by applying SDMBCv2 package",
                     }
                 )
-            else:
-                full_bc_corrected[var].attrs.update(
-                    {
-                        "description": f"bias-corrected data, {m_names[int(config.correction_model)-1]}, SDMBCv2",
-                        "history": "Created by applying SDMBCv2 package",
-                    }
-                )
-        if bc_boundary == "lateral":
+
             if "lev" not in full_bc_corrected.dims:
                 full_bc_corrected = full_bc_corrected.expand_dims(
-                    lev=[full_bc_corrected.lev.values]
+                    lev=[full_bc_corrected.lev[0].values]
                 )
             full_bc_corrected = full_bc_corrected.transpose("time", "lev", "lat", "lon")
-        else:
-            full_bc_corrected = full_bc_corrected.transpose("time", "lat", "lon")
 
-        print("save the bc model")
-        full_bc_corrected = full_bc_corrected.astype("float32")  # save as float32
-
-        # Save the BC model
-        if bc_boundary == "lateral":
-            np.save(
-                f"{out_path}/bc_params_3d_lev_{level}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
-                full_param_array_corrected,
-            )
-        else:
-            np.save(
-                f"{out_path}/bc_params_2d_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
-                full_param_array_corrected,
-            )
+            print("save the bc model")
+            full_bc_corrected = full_bc_corrected.astype("float32")  # save as float32
 
         if config.save_bc_output:
             # save the bias corrected data # from input gcm or obs to target gcm
-            if bc_boundary == "lateral":
-                full_bc_corrected.load().to_netcdf(
-                    f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
-                )
-            else:
-                full_bc_corrected.load().to_netcdf(
-                    f"{out_path}/bc_corrected_2d_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
-                )
+            full_bc_corrected.load().to_netcdf(
+                f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+            )
 
         # Remove the temporary directory and its contents
         shutil.rmtree(temp_dir)
@@ -464,9 +596,12 @@ def main(config):
             # print("K-S test has been included")
             # bottom level test for 3d field
             level = 0
-            save_figure_3d(
-                file_paths_by_variable_gcm, file_paths_by_variable_obs, level
-            )
+            if config.bc_hist:
+                save_figure_3d(
+                    file_paths_by_variable_gcm, file_paths_by_variable_obs, level
+                )
+            else:
+                save_figure_3d(file_paths_by_variable_gcm, out_path, level)
             print("Finish 3d field")
 
 

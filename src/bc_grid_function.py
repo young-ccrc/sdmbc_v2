@@ -16,6 +16,8 @@ This module is intended to be used as part of the SDMBCv2 package for correcting
 
 import itertools  # type: ignore
 import os
+from multiprocessing import Pool, cpu_count
+from types import SimpleNamespace
 
 import dask  # type: ignore
 import dask.array as da  # type: ignore
@@ -31,6 +33,7 @@ from data_preparation import (
     convert_to_daily_with_fraction,
     daily_to_6hourly_xr,
     extract_and_reshape_delayed,
+    load_and_combine_variables,
 )
 
 # from mrmbc import constants as cons  # type: ignore
@@ -39,6 +42,7 @@ from sdmbc_bc_function import (
     bc_correction_hist,
     empirical_quantile_mapping_future_xarray,
     quantile_mapping_rescale_all,
+    quantile_mapping_rescale_future,
     rescale_to_sum_one,
 )
 
@@ -82,7 +86,7 @@ def correction_wrapper_future(gcm_data, bc_params_array):
     """
     grid_cell_gcm = np.stack(gcm_data, axis=0)  # Shape should be (3, 31, 12, 31)
     result_dict = bc_correction_future(grid_cell_gcm, bc_params_array)
-    return result_dict["gcmc"]
+    return result_dict
 
 
 def process_grid_cell(lat, lon, reshaped_gcm, reshaped_obs):
@@ -256,7 +260,6 @@ def process_tile(
     tile,
     variables,
     file_paths_by_variable_gcm,
-    file_paths_by_variable_obs,
     level,
     config,
     temp_dir,
@@ -415,6 +418,309 @@ def process_tile(
         )
 
     return bc_corrected_gcm_hist_tile, bc_params_tile
+
+
+def future_subdaily_correction(
+    tile,
+    variables,
+    file_paths_by_variable_gcm,
+    file_paths_by_variable_obs,
+    ff_future,
+    bc_corrected_gcm_future_tile,
+    level,
+    config,
+):
+    """
+    Process a single tile for bias correction, involving loading GCM and observational data,
+    performing bias correction, and saving the outputs.
+
+    Args:
+        tile (dict): Dictionary defining the spatial bounds of the tile.
+        variables (list): List of variable names to process.
+        file_paths_by_variable_gcm (dict): File paths for GCM data by variable.
+        file_paths_by_variable_obs (dict): File paths for observational data by variable.
+        level (int): Processing level for multilevel data.
+        config (module): Configuration object for bias correction parameters.
+        temp_dir (str): Path to the temporary directory for intermediate files.
+
+    Returns:
+        None
+    """
+
+    """Process a single tile for bias correction."""
+    lat_range = (tile["lat_min"], tile["lat_max"])
+    lon_range = (tile["lon_min"], tile["lon_max"])
+
+    # ------------------ Load GCM historical Data ------------------
+    sliced_gcm = xr.Dataset()
+    for var_name, file_paths in file_paths_by_variable_gcm.items():
+        data_var = load_preprocess_variable(
+            file_paths,
+            var_name,
+            level,
+            lat_range,
+            lon_range,
+            config.startyear_h,
+            config.endyear_h,
+        )
+
+        # Check if the variable is one of the wind components with different lon
+        if var_name in ["ua", "va"]:
+            # Let's assume hus and ta have the target longitude values, and they are already loaded
+            target_lon = sliced_gcm.lon if "lon" in sliced_gcm else data_var.lon
+            target_lat = sliced_gcm.lat if "lat" in sliced_gcm else data_var.lat
+            target_lev = sliced_gcm.lev if "lev" in sliced_gcm else data_var.lev
+
+            # Interpolate va to match the target latitude grid
+            if not data_var.lat.equals(target_lat):
+                data_var = data_var.interp(
+                    lat=target_lat,
+                    method="linear",
+                    kwargs={"fill_value": "extrapolate"},
+                )
+            if not data_var.lon.equals(target_lon):
+                data_var = data_var.interp(
+                    lon=target_lon,
+                    method="linear",
+                    kwargs={"fill_value": "extrapolate"},
+                )
+            # Assign the adjusted longitude values to ua or va
+            data_var = data_var.assign_coords(
+                lon=target_lon, lat=target_lat, lev=target_lev
+            )
+        if isinstance(data_var, xr.Dataset):  # Ensure we extract the correct DataArray
+            data_var = data_var[var_name]
+        sliced_gcm[var_name] = data_var
+
+    if config.bc_boundary == "lateral":
+        assign_gcm = assign_w_6hr(sliced_gcm, config.bc_boundary)
+        _, ff_gcm = convert_to_daily_with_fraction(assign_gcm)
+
+    # ------------------ Load Observational Data ------------------
+    sliced_obs = xr.Dataset()
+
+    for var_name in variables:
+        # Construct the path to the preprocessed file for this variable
+        obs_file = os.path.join(
+            file_paths_by_variable_obs,
+            f"preprocessed_obs_{var_name}_lev_{level}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc",
+        )
+        obs_var = xr.open_dataset(obs_file)[var_name]  # Load the variable from the file
+        sliced_obs[var_name] = obs_var  # Add it to the observational dataset
+
+    sliced_obs = sliced_obs.sel(
+        lat=slice(sliced_gcm.lat.min().item(), sliced_gcm.lat.max().item()),
+        lon=slice(sliced_gcm.lon.min().item(), sliced_gcm.lon.max().item()),
+    )
+
+    assign_obs = assign_w_6hr(sliced_obs, config.bc_boundary)
+    _, ff_obs = convert_to_daily_with_fraction(assign_obs)
+
+    ff_obs = ff_obs.compute()
+    ff_gcm = ff_gcm.compute()
+    ff_future = ff_future.compute()
+
+    ff_future_corrected = quantile_mapping_rescale_future(ff_obs, ff_gcm, ff_future)
+
+    six_hourly_data_future = daily_to_6hourly_xr(
+        bc_corrected_gcm_future_tile,
+        ff_future_corrected,
+        var_list_w,
+        config.startyear_f,
+        config.endyear_f,
+    )
+
+    if "lev" not in six_hourly_data_future.dims:
+        six_hourly_data_future = six_hourly_data_future.expand_dims(
+            lev=[ff_gcm.lev[0].values]
+        )
+
+    return six_hourly_data_future
+
+
+def dict_to_simplenamespace(d):
+    return SimpleNamespace(**d)
+
+
+def process_tile_future(
+    tile,
+    variables,
+    level,
+    config,
+    file_paths_by_variable_gcm,
+    file_paths_by_variable_obs,
+):
+    """
+    Process a single tile for bias correction, involving loading GCM and observational data,
+    performing bias correction, and saving the outputs.
+
+    Args:
+        tile (dict): Dictionary defining the spatial bounds of the tile.
+        variables (list): List of variable names to process.
+        file_paths_by_variable_gcm (dict): File paths for GCM data by variable.
+        file_paths_by_variable_obs (dict): File paths for observational data by variable.
+        level (int): Processing level for multilevel data.
+        config (module): Configuration object for bias correction parameters.
+        temp_dir (str): Path to the temporary directory for intermediate files.
+
+    Returns:
+        None
+    """
+
+    """Process a single tile for bias correction."""
+    lat_range = (tile["lat_min"], tile["lat_max"])
+    lon_range = (tile["lon_min"], tile["lon_max"])
+
+    # =============== Load GCM ===============
+    sliced_gcm_future = load_and_combine_variables(
+        variables,
+        level,
+        config.startyear_f,
+        config.endyear_f,
+        data_type=config.period_f,
+    )
+    sliced_gcm = sliced_gcm_future.sel(
+        time=slice(f"{config.startyear_f}-01-01", f"{config.endyear_f}-12-31")
+    )
+    assign_gcm = assign_w_6hr(sliced_gcm, config.bc_boundary)
+    daily_gcm, ff_future = convert_to_daily_with_fraction(assign_gcm)
+
+    reshaped_gcm_delayed = extract_and_reshape_delayed(
+        daily_gcm,
+        config.no_of_variables,
+        config.startyear_f,
+        config.endyear_f,
+        config.bc_boundary,
+    )
+
+    bc_params_array_loaded = np.load(
+        f"{config.out_path}/bc_params_3d_lev_{level}_{config.gname}_to_{config.input_model}_{config.startyear_h}_{config.endyear_h}.npy",
+        allow_pickle=True,
+    )
+
+    # Assuming the shape is (1, 3) and contains dictionaries
+    for i in range(bc_params_array_loaded.shape[0]):
+        for j in range(bc_params_array_loaded.shape[1]):
+            bc_params_array_loaded[i, j] = dict_to_simplenamespace(
+                bc_params_array_loaded[i, j]
+            )
+
+    # Perform bias correction across the tile
+    bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_dask(
+        reshaped_gcm_delayed,
+        bc_params_array_loaded,
+        var_list_w,
+    )
+
+    if config.sub_daily_correction:
+        bc_corrected_gcm_future = future_subdaily_correction(
+            tile,
+            variables,
+            file_paths_by_variable_gcm,
+            file_paths_by_variable_obs,
+            ff_future,
+            bc_corrected_gcm_future_tile,
+            level,
+            config,
+        )
+    else:
+        bc_corrected_gcm_future = daily_to_6hourly_xr(
+            bc_corrected_gcm_future_tile,
+            ff_future,
+            var_list_w,
+            config.startyear_f,
+            config.endyear_f,
+        )
+
+    return bc_corrected_gcm_future
+
+
+def bc_correction_grid_cell_future_dask(
+    gcm_future,
+    bc_params_array,
+    var_list_w,
+):
+    """
+    Perform daily bias correction for future GCM data across all grid cells in parallel using Dask.
+
+    Args:
+        ff_gcm, ff_obs: Fraction factors for GCM and observational data.
+        gcm_future (xarray.Dataset): GCM data for future period.
+        ff_gcm_future: Fraction factors for future GCM data.
+        bc_params_array: Bias correction parameters.
+        startyear_f (int): Start year of the future period.
+        endyear_f (int): End year of the future period.
+        var_list_w (list of str): List of variable names to be corrected.
+        sliced_gcm_future (xarray.Dataset): Sliced GCM data.
+
+    Returns:
+        xarray.Dataset: Bias-corrected daily GCM data for the future.
+    """
+
+    # grid_cells = list(itertools.product(gcm_future.lat.values, gcm_future.lon.values))
+    # batch_size = 20  # Process 20 grid cells at a time
+    # tasks = [
+    #     dask.delayed(process_batch_of_grid_cells_future)(
+    #         grid_cells[i : i + batch_size], gcm_future, bc_params_array
+    #     )
+    #     for i in range(0, len(grid_cells), batch_size)
+    # ]
+    # # Generate tasks for each grid cell
+    tasks = [
+        process_grid_cell_future(lat, lon, gcm_future, bc_params_array)
+        for lat, lon in itertools.product(gcm_future.lat.values, gcm_future.lon.values)
+    ]
+
+    # Compute all tasks in parallel at the end
+    results = dask.compute(*tasks)
+
+    # Flatten the list of results
+    flattened_results = [item for sublist in results for item in sublist]
+
+    # Initialize arrays to hold the final data
+    corrected_data = {
+        var: np.empty((31, 12, 31, len(gcm_future.lat), len(gcm_future.lon)))
+        for var in var_list_w
+    }
+
+    # Fill the arrays with data from results
+    for result in results:
+        lat_idx = np.where(gcm_future.lat.values == result["lat"])[0][0]
+        lon_idx = np.where(gcm_future.lon.values == result["lon"])[0][0]
+        for i, var in enumerate(var_list_w):
+            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+
+    # Convert to Xarray Dataset
+    gcmc_corrected = xr.Dataset(
+        {
+            var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
+            for var in var_list_w
+        },
+        coords={
+            "year": gcm_future.year,
+            "month": gcm_future.month,
+            "day": gcm_future.day,
+            "lat": gcm_future.lat,
+            "lon": gcm_future.lon,
+        },
+    )
+
+    # six_hourly_data = rescale_and_reformat_future(
+    #     gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future
+    # )
+
+    # # g_u = sliced_gcm_future.ua.sel(time=slice(str(startyear_f), str(endyear_f)))
+    # # g_v = sliced_gcm_future.va.sel(time=slice(str(startyear_f), str(endyear_f)))
+    # # six_hourly_data = six_hourly_data.sel(time=slice(str(startyear_f), str(endyear_f)))
+
+    # bc_corrected_6hourly_data = apply_boundary_correction(
+    #     six_hourly_data, sliced_gcm_future
+    # )
+
+    # # Compute all delayed tasks in parallel
+    # final_corrected_data = dask.compute(bc_corrected_6hourly_data)
+
+    return gcmc_corrected
 
 
 def preprocess_and_save_obs(
@@ -823,6 +1129,92 @@ def bc_correction_grid_cell_hist_dask_2d(
 #     return final_corrected_data[0]
 
 
+def correction_wrapper_future_pool(args):
+    """
+    Wrapper function to apply bias correction for a single (lat, lon) grid cell.
+    Runs in parallel using multiprocessing.
+    """
+    lat, lon, reshaped_gcm, bc_params_array = args
+    # Print the process ID (PID) to check parallel execution
+    # print(f"Processing lat: {lat}, lon: {lon} on process ID: {os.getpid()}")
+
+    # Extract GCM data for this (lat, lon)
+    gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
+
+    # Find nearest indices
+    lat_array = reshaped_gcm.lat.values
+    lon_array = reshaped_gcm.lon.values
+
+    lat_idx = (np.abs(lat_array - lat)).argmin()
+    lon_idx = (np.abs(lon_array - lon)).argmin()
+
+    # Select bias correction parameters
+    params_data = bc_params_array[lat_idx, lon_idx]
+
+    # Convert GCM data to NumPy (Fortran needs NumPy)
+    gcm_data_np = np.stack(gcm_data, axis=0).astype(np.float32)
+
+    # Apply bias correction using Fortran function
+    result_dict = bc_correction_future(gcm_data_np, params_data)
+
+    return {"lat": lat, "lon": lon, "gcmc_corrected": result_dict}
+
+
+def bc_correction_grid_cell_future_multiprocess(gcm_future, bc_params_array, variable):
+    """
+    Apply bias correction for future data using multiprocessing (no tiling required).
+    """
+    # Extract lat/lon values
+    lat_values = gcm_future.lat.values
+    lon_values = gcm_future.lon.values
+
+    # Prepare arguments for multiprocessing (list of tuples)
+    args_list = [
+        (lat, lon, gcm_future, bc_params_array)
+        for lat in lat_values
+        for lon in lon_values
+    ]
+
+    # Use multiprocessing Pool
+    num_workers = cpu_count()  # Get number of CPU cores
+    n = min(len(os.sched_getaffinity(0)), num_workers, 96)
+    print(f"Using {n} CPU cores for parallel processing...")
+
+    with Pool(processes=n) as pool:
+        results = pool.map(correction_wrapper_future_pool, args_list)
+
+    # Convert results back to xarray.Dataset
+    corrected_data = {
+        var: np.empty((31, 12, 31, len(lat_values), len(lon_values)))
+        for var in variable
+    }
+
+    # Fill the arrays
+    for result in results:
+        lat_idx = np.where(lat_values == result["lat"])[0][0]
+        lon_idx = np.where(lon_values == result["lon"])[0][0]
+        for i, var in enumerate(variable):
+            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+
+    # Convert to xarray Dataset
+    gcmc_corrected = xr.Dataset(
+        {
+            var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
+            for var in variable
+        },
+        coords={
+            "year": gcm_future.year,
+            "month": gcm_future.month,
+            "day": gcm_future.day,
+            "lat": gcm_future.lat,
+            "lon": gcm_future.lon,
+        },
+    )
+    daily_data_aligned = align_daily_data_xr(gcmc_corrected, config.startyear_f)
+
+    return daily_data_aligned
+
+
 def bc_correction_grid_cell_future_daily_dask(
     ff_gcm,
     ff_obs,
@@ -1090,7 +1482,7 @@ def apply_moving_window_bias_correction(
         )
 
         if config.sub_daily_correction:
-            corrected_data = bc_correction_grid_cell_future_subdaily_dask(
+            corrected_data = bc_correction_grid_cell_future_daily_dask(
                 lat,
                 lon,
                 fraction_factor,

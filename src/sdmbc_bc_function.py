@@ -64,7 +64,8 @@ no_of_variables = config.no_of_variables
 startyear_h = config.startyear_h
 upper_limit = config.upper_limit
 bc_boundary = config.bc_boundary
-
+startyear_f = config.startyear_f
+endyear_f = config.endyear_f
 time_scale = 0  # 0: daily, 1: monthly, default: 0
 missing_value = 0.00001  # missing value in the input data
 moving_window = 15  # centred moving window if input data is at daily time scale
@@ -284,72 +285,198 @@ def quantile_mapping_rescale_all(
     return corrected_vars
 
 
-def empirical_quantile_mapping_future(
-    o_hist, s_hist, s_future, n_quantiles=100, extrapolation="constant"
+# # Adjust grouping by creating a corrected "adjusted_dayofyear"
+# def corrected_dayofyear(time):
+#     """
+#     Adjust `dayofyear` to ensure:
+#     - Leap year days (e.g., 29 Feb) are consistently mapped.
+#     - Allows for consistent application of historical QM correction to future.
+#     """
+#     is_leap = time.dt.year % 4 == 0
+#     dayofyear = time.dt.dayofyear
+
+#     leap_adjusted = xr.where(
+#         is_leap & (time.dt.month == 2) & (time.dt.day == 29),
+#         60,  # Assign Feb 29 as day 60
+#         dayofyear
+#     )
+
+#     final_adjusted = xr.where(
+#         ~is_leap & (dayofyear > 59),  # Non-leap years shift days after Feb
+#         dayofyear + 1,
+#         leap_adjusted
+#     )
+
+#     return final_adjusted
+
+
+def quantile_mapping_rescale_future(
+    obs_hist, sim_hist, sim_future, time_steps=("00:00", "06:00", "12:00", "18:00")
 ):
     """
-    Empirical Quantile Mapping for future period using historical observational and simulation data.
+    Apply quantile mapping corrections derived from historical data to future simulations,
+    handling leap years and time mismatches.
 
     Parameters:
-        o_hist (dask.array or np.ndarray): Historical observational data.
-        s_hist (dask.array or np.ndarray): Historical simulation data.
-        s_future (dask.array or np.ndarray): Future simulation data to be corrected.
-        n_quantiles (int): Number of quantiles for mapping.
-        extrapolation (str): Method for extrapolation ("constant" or "linear").
+        obs_hist (xr.Dataset): Historical Observational dataset.
+        sim_hist (xr.Dataset): Historical GCM dataset.
+        sim_future (xr.Dataset): Future GCM dataset.
+        variables (list): List of variables to process (e.g., ["w", "ta", "hus"]).
+        time_steps (tuple): List of 6-hourly time steps to process.
 
     Returns:
-        dask.array: Corrected future simulation data.
+        xr.Dataset: Future dataset with bias-corrected variables.
     """
 
-    # Ensure input arrays are Dask arrays
-    o_hist = da.asarray(o_hist) if isinstance(o_hist, np.ndarray) else o_hist
-    s_hist = da.asarray(s_hist) if isinstance(s_hist, np.ndarray) else s_hist
-    s_future = da.asarray(s_future) if isinstance(s_future, np.ndarray) else s_future
+    # Compute adjusted day-of-year for all datasets
+    obs_hist["adjusted_dayofyear"] = corrected_dayofyear(obs_hist.time)
+    sim_hist["adjusted_dayofyear"] = corrected_dayofyear(sim_hist.time)
+    sim_future["adjusted_dayofyear"] = corrected_dayofyear(sim_future.time)
 
-    # Define the quantiles to be computed
-    quantiles = np.linspace(0, 100, n_quantiles)
+    # corrected_ds = xr.Dataset(coords=sim_future.coords)
 
-    # Compute the quantiles along the appropriate axis using map_blocks
-    obs_quantiles = da.map_blocks(
-        compute_quantiles_along_axis,
-        o_hist,
-        axis=0,
-        quantiles=quantiles,
-        dtype=o_hist.dtype,
-    )
-    sim_quantiles = da.map_blocks(
-        compute_quantiles_along_axis,
-        s_hist,
-        axis=0,
-        quantiles=quantiles,
-        dtype=s_hist.dtype,
-    )
+    # for var in variables:
+    #     obs = obs_hist[var]
+    #     sim_hist_var = sim_hist[var]
+    #     sim_future_var = sim_future[var]
+    corrected_var = sim_future.copy()
 
-    # Interpolate to map future simulations to observational quantiles
-    corrected_s_future = da.map_blocks(
-        np.interp, s_future, sim_quantiles, obs_quantiles, dtype=s_future.dtype
-    )
-
-    # Handle extrapolation for values outside the range of historical simulation data
-    if extrapolation == "constant":
-        upper_extrap = obs_quantiles[-1] - sim_quantiles[-1]
-        lower_extrap = obs_quantiles[0] - sim_quantiles[0]
-
-        corrected_s_future = da.where(
-            s_future > sim_quantiles[-1], s_future + upper_extrap, corrected_s_future
-        )
-        corrected_s_future = da.where(
-            s_future < sim_quantiles[0], s_future + lower_extrap, corrected_s_future
-        )
-    else:
-        corrected_s_future = da.where(
-            s_future > sim_quantiles[-1], obs_quantiles[-1], corrected_s_future
-        )
-        corrected_s_future = da.where(
-            s_future < sim_quantiles[0], obs_quantiles[0], corrected_s_future
+    for step in time_steps:
+        # Select historical step data
+        obs_step = obs_hist.sel(time=obs_hist.time.dt.strftime("%H:%M") == step)
+        sim_hist_step = sim_hist.sel(time=sim_hist.time.dt.strftime("%H:%M") == step)
+        sim_future_step = sim_future.sel(
+            time=sim_future.time.dt.strftime("%H:%M") == step
         )
 
-    return corrected_s_future
+        # Group by adjusted day of year
+        obs_clim = obs_step.groupby("adjusted_dayofyear")
+        sim_clim = sim_hist_step.groupby("adjusted_dayofyear")
+        sim_future_clim = sim_future_step.groupby("adjusted_dayofyear")
+
+        corrected_steps = []
+        for day in np.unique(sim_future["adjusted_dayofyear"]):
+            if (
+                day in obs_clim.groups
+                and day in sim_clim.groups
+                and day in sim_future_clim.groups
+            ):
+                obs_group = obs_step.isel(time=obs_clim.groups[day])
+                sim_hist_group = sim_hist_step.isel(time=sim_clim.groups[day])
+                sim_future_group = sim_future_step.isel(
+                    time=sim_future_clim.groups[day]
+                )
+
+                # Compute quantiles for climatology
+                quantiles = np.linspace(0, 1, 100)
+                obs_quantiles = obs_group.quantile(quantiles, dim="time")
+                sim_hist_quantiles = sim_hist_group.quantile(quantiles, dim="time")
+
+                # Apply quantile mapping to future GCM data
+                corrected_group = xr.apply_ufunc(
+                    np.interp,
+                    sim_future_group,
+                    sim_hist_quantiles,
+                    obs_quantiles,
+                    input_core_dims=[["time"], ["quantile"], ["quantile"]],
+                    output_core_dims=[["time"]],
+                    vectorize=True,
+                    dask="parallelized",
+                    # output_dtypes=[sim_future.dtype],
+                )
+                corrected_steps.append(corrected_group)
+
+        # Concatenate and reindex to align with future dataset
+        corrected_step = xr.concat(corrected_steps, dim="time").reindex_like(
+            corrected_var
+        )
+
+        # Assign corrected values back to the output variable
+        corrected_var = corrected_var.where(
+            sim_future.time.dt.strftime("%H:%M") != step, corrected_step
+        )
+
+        # Rescale the corrected variable to ensure daily sums equal 4
+        daily_sum = corrected_var.resample(time="1D").sum()
+        daily_sum = (
+            daily_sum.resample(time="6h")
+            .ffill()
+            .reindex(time=corrected_var.time, method="ffill")
+        )
+        corrected_var_rescaled = corrected_var / daily_sum * 4
+
+        # Add the corrected variable to the output dataset
+        # corrected_ds[var] = corrected_var_rescaled
+
+    return corrected_var_rescaled
+
+
+# def empirical_quantile_mapping_future(
+#     o_hist, s_hist, s_future, n_quantiles=100, extrapolation="constant"
+# ):
+#     """
+#     Empirical Quantile Mapping for future period using historical observational and simulation data.
+
+#     Parameters:
+#         o_hist (dask.array or np.ndarray): Historical observational data.
+#         s_hist (dask.array or np.ndarray): Historical simulation data.
+#         s_future (dask.array or np.ndarray): Future simulation data to be corrected.
+#         n_quantiles (int): Number of quantiles for mapping.
+#         extrapolation (str): Method for extrapolation ("constant" or "linear").
+
+#     Returns:
+#         dask.array: Corrected future simulation data.
+#     """
+
+#     # Ensure input arrays are Dask arrays
+#     o_hist = da.asarray(o_hist) if isinstance(o_hist, np.ndarray) else o_hist
+#     s_hist = da.asarray(s_hist) if isinstance(s_hist, np.ndarray) else s_hist
+#     s_future = da.asarray(s_future) if isinstance(s_future, np.ndarray) else s_future
+
+#     # Define the quantiles to be computed
+#     quantiles = np.linspace(0, 100, n_quantiles)
+
+#     # Compute the quantiles along the appropriate axis using map_blocks
+#     obs_quantiles = da.map_blocks(
+#         compute_quantiles_along_axis,
+#         o_hist,
+#         axis=0,
+#         quantiles=quantiles,
+#         dtype=o_hist.dtype,
+#     )
+#     sim_quantiles = da.map_blocks(
+#         compute_quantiles_along_axis,
+#         s_hist,
+#         axis=0,
+#         quantiles=quantiles,
+#         dtype=s_hist.dtype,
+#     )
+
+#     # Interpolate to map future simulations to observational quantiles
+#     corrected_s_future = da.map_blocks(
+#         np.interp, s_future, sim_quantiles, obs_quantiles, dtype=s_future.dtype
+#     )
+
+#     # Handle extrapolation for values outside the range of historical simulation data
+#     if extrapolation == "constant":
+#         upper_extrap = obs_quantiles[-1] - sim_quantiles[-1]
+#         lower_extrap = obs_quantiles[0] - sim_quantiles[0]
+
+#         corrected_s_future = da.where(
+#             s_future > sim_quantiles[-1], s_future + upper_extrap, corrected_s_future
+#         )
+#         corrected_s_future = da.where(
+#             s_future < sim_quantiles[0], s_future + lower_extrap, corrected_s_future
+#         )
+#     else:
+#         corrected_s_future = da.where(
+#             s_future > sim_quantiles[-1], obs_quantiles[-1], corrected_s_future
+#         )
+#         corrected_s_future = da.where(
+#             s_future < sim_quantiles[0], obs_quantiles[0], corrected_s_future
+#         )
+
+#     return corrected_s_future
 
 
 def rescale_to_sum_one(ds):
@@ -719,7 +846,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                 itmp, 5, 1
             ):  # set irho matrix (bias correction options: 1-included and 0-excluded)
                 irho[i, :] = [1, 1, 1, 0, 0]
-
+    else:
+        newvar = nvar
     # nday=np.zeros([constants.monmax,])
     nday = mbc.day()
     rem = np.zeros([no_of_variables, nycur, 12])
@@ -1765,7 +1893,7 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
     return {"gcmc": gcmc, "bc_params": bc_params}
 
 
-def bc_correction_future(gcm_reshape, bc_params, startyear_f, endyear_f):
+def bc_correction_future(gcm_reshape, bc_params):
     """
     Perform bias correction for future climate data.
 
@@ -1793,8 +1921,9 @@ def bc_correction_future(gcm_reshape, bc_params, startyear_f, endyear_f):
     # Exclude specific humidity if the first element of the GCM data is less than 0.1
     # to avoid unexpected values during the bias correction process
     nvar = no_of_variables
+    newvar = nvar
     if bc_boundary == "lateral":
-        if correction_model == 4 and np.min(gcm_reshape[2, :, :, :]) < 0.1:
+        if correction_model == 4 and np.max(gcm_reshape[2, :, :, :]) < 0.1:
             print("Exclude specific humidity below the lower threshold (1*10-4).")
             newvar = nvar - 1
 
@@ -1956,16 +2085,22 @@ def bc_correction_future(gcm_reshape, bc_params, startyear_f, endyear_f):
             #         bc_params.phul[jj, j] = phupr[j] * 4
             # changed threshold considering assign_6hr function that times 10 for wind speed
             for j in range(no_of_variables):
-                if config.boundary == "lateral" and j == 0:
-                    if bc_params.phll[jj, j] < phlwr[j] * 10:
-                        bc_params.phll[jj, j] = phlwr[j] * 10
-                    if bc_params.phul[jj, j] > phupr[j] * 10:
-                        bc_params.phul[jj, j] = phupr[j] * 10
-                else:
-                    if bc_params.phll[jj, j] < phlwr[j]:
-                        bc_params.phll[jj, j] = phlwr[j]
-                    if bc_params.phul[jj, j] > phupr[j]:
-                        bc_params.phul[jj, j] = phupr[j]
+                factor = 10 if config.bc_boundary == "lateral" and j in {0, 2} else 1
+                if bc_params.phll[jj, j] < phlwr[j] * factor:
+                    bc_params.phll[jj, j] = phlwr[j] * factor
+                if bc_params.phul[jj, j] > phupr[j] * factor:
+                    bc_params.phul[jj, j] = phupr[j] * factor
+            # for j in range(no_of_variables):
+            #     if config.boundary == "lateral" and j == 0:
+            #         if bc_params.phll[jj, j] < phlwr[j] * 10:
+            #             bc_params.phll[jj, j] = phlwr[j] * 10
+            #         if bc_params.phul[jj, j] > phupr[j] * 10:
+            #             bc_params.phul[jj, j] = phupr[j] * 10
+            #     else:
+            #         if bc_params.phll[jj, j] < phlwr[j]:
+            #             bc_params.phll[jj, j] = phlwr[j]
+            #         if bc_params.phul[jj, j] > phupr[j]:
+            #             bc_params.phul[jj, j] = phupr[j]
             # for j in range(no_of_variables):
             #     if bc_params.phll[jj, j] < phlwr[j]:
             #         bc_params.phll[jj, j] = phlwr[j]

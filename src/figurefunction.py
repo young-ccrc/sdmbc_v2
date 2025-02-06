@@ -73,10 +73,9 @@ warnings.simplefilter("ignore")
 # Functions for main_figure =========================================
 # functions for 3D --------------------------------------------------
 
-startyear_h = config.startyear_h
-endyear_h = config.endyear_h
+# startyear_h = config.startyear_h
+# endyear_h = config.endyear_h
 no_of_variables = config.no_of_variables
-startyear_h = config.startyear_h
 bc_boundary = config.bc_boundary
 bc_hist_path = config.bc_hist_path
 lat_max = config.lat_max
@@ -95,6 +94,13 @@ sinfor = config.sinfor
 version = config.version
 variables = config.target_variable
 out_figure_path = config.out_figure_path
+
+if config.period == "historical":
+    startyear = config.startyear_h
+    endyear = config.endyear_h
+else:
+    startyear = config.startyear_f
+    endyear = config.endyear_f
 
 
 # Set variable hus, ta, and w
@@ -344,7 +350,7 @@ def compute_ks_comparison(
     # Create a DataFrame for comparison
     df_ks_comparison = pd.DataFrame(
         data,
-        columns=["Time Interval", "Variable", "GCM KS Agreement", "QM KS Agreement"],
+        columns=["Time Interval", "Variable", "GCM KS Agreement", "SDMBC KS Agreement"],
     )
 
     # Extract "p≥0.05" and "p≥0.01" values for GCM and QM KS agreement
@@ -355,19 +361,19 @@ def compute_ks_comparison(
     ks_comparison["GCM KS Agreement (p≥0.01)"] = df_ks_comparison[
         "GCM KS Agreement"
     ].apply(lambda x: extract_p_values(x, "p>=0.01"))
-    ks_comparison["QM KS Agreement (p≥0.05)"] = df_ks_comparison[
-        "QM KS Agreement"
+    ks_comparison["SDMBC KS Agreement (p≥0.05)"] = df_ks_comparison[
+        "SDMBC KS Agreement"
     ].apply(lambda x: extract_p_values(x, "p>=0.05"))
-    ks_comparison["QM KS Agreement (p≥0.01)"] = df_ks_comparison[
-        "QM KS Agreement"
+    ks_comparison["SDMBC KS Agreement (p≥0.01)"] = df_ks_comparison[
+        "SDMBC KS Agreement"
     ].apply(lambda x: extract_p_values(x, "p>=0.01"))
 
     # Convert values to formatted percentage strings
     for col in [
         "GCM KS Agreement (p≥0.05)",
         "GCM KS Agreement (p≥0.01)",
-        "QM KS Agreement (p≥0.05)",
-        "QM KS Agreement (p≥0.01)",
+        "SDMBC KS Agreement (p≥0.05)",
+        "SDMBC KS Agreement (p≥0.01)",
     ]:
         ks_comparison[col] = ks_comparison[col].apply(
             lambda x: f"{x:.2f}%" if not pd.isna(x) else "N/A"
@@ -380,8 +386,8 @@ def compute_ks_comparison(
             "Variable",
             "GCM KS Agreement (p≥0.05)",
             "GCM KS Agreement (p≥0.01)",
-            "BC KS Agreement (p≥0.05)",
-            "BC KS Agreement (p≥0.01)",
+            "SDMBC KS Agreement (p≥0.05)",
+            "SDMBC KS Agreement (p≥0.01)",
         ]
     ]
     ks_comparison.to_csv(
@@ -624,11 +630,11 @@ def plot_bias_grid(
     # Adjust layout to prevent overlap
     plt.tight_layout()
     plt.savefig(
-        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear_h}_{endyear_h}.jpg",
+        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear}_{endyear}.jpg",
         dpi=300,
         bbox_inches="tight",
     )
-    plt.show()
+    # plt.show()
 
 
 # Function to plot bias maps for multiple variables in a grid layout
@@ -739,11 +745,11 @@ def plot_bias_grid_auto(
     # Adjust layout to prevent overlap
     plt.tight_layout()
     plt.savefig(
-        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear_h}_{endyear_h}.jpg",
+        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear}_{endyear}.jpg",
         dpi=300,
         bbox_inches="tight",
     )
-    plt.show()
+    # plt.show()
 
 
 # Function to plot bias maps for multiple variables in a grid layout
@@ -855,11 +861,11 @@ def plot_bias_grid_cross(
     # Adjust layout to prevent overlap
     plt.tight_layout()
     plt.savefig(
-        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear_h}_{endyear_h}.jpg",
+        f"{out_figure_path}/sdmbc_{level}_{statistic}_{startyear}_{endyear}.jpg",
         dpi=300,
         bbox_inches="tight",
     )
-    plt.show()
+    # plt.show()
 
 
 # Scatter plot of 3d atmospheric variables
@@ -868,7 +874,7 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs, level
     lon_range = (lon_min, lon_max)
     level = 0
     # Create a temporary folder for saving intermediate files
-    temp_dir = os.path.join(config.out_figure_path, "temp_figure")
+    temp_dir = os.path.join(out_figure_path, "temp_figure")
     os.makedirs(temp_dir, exist_ok=True)
 
     # =============== Load GCM ===============
@@ -880,8 +886,8 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs, level
             level,
             lat_range,
             lon_range,
-            config.startyear_h,
-            config.endyear_h,
+            startyear,
+            endyear,
         )
         data_var = data_var.astype("float32")
         # Check if the variable is one of the wind components with different lon
@@ -918,7 +924,7 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs, level
         dgcm_3d, fraction_factors_gcm = convert_to_daily_with_fraction(assign_gcm)
         # dgcm_3d = dgcm_3d.chunk({"time": 1000, "lat": 'auto', "lon": 'auto'})
         dgcm_3d.load().to_netcdf(
-            f"{temp_dir}/temp_gcm_daily_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+            f"{temp_dir}/temp_gcm_daily_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear}_{endyear}.nc"
         )
     # =============== Load GCM end ===============
 
@@ -933,8 +939,8 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs, level
             level,
             lat_range,
             lon_range,
-            startyear_h,
-            endyear_h,
+            startyear,
+            endyear,
         )
         obs_var = obs_var.astype("float32")
         # Add the processed variable to the dataset
@@ -946,18 +952,16 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs, level
         assign_obs = assign_w_6hr(sliced_obs, bc_boundary)
         dobs_3d, fraction_factors_obs = convert_to_daily_with_fraction(assign_obs)
         # dobs_3d = dobs_3d.chunk({"time": 1000, "lat": 'auto', "lon": 'auto'})
-        dobs_3d.load().to_netcdf(
-            f"{temp_dir}/temp_obs_daily_{startyear_h}_{endyear_h}.nc"
-        )
+        dobs_3d.load().to_netcdf(f"{temp_dir}/temp_obs_daily_{startyear}_{endyear}.nc")
     # =============== Load Obs end ===============
 
     # Load the processed GCM and Obs data
     gcm = xr.open_dataset(
-        f"{temp_dir}/temp_gcm_daily_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+        f"{temp_dir}/temp_gcm_daily_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear}_{endyear}.nc"
     )
-    era = xr.open_dataset(f"{temp_dir}/temp_obs_daily_{startyear_h}_{endyear_h}.nc")
+    era = xr.open_dataset(f"{temp_dir}/temp_obs_daily_{startyear}_{endyear}.nc")
     bcd = xr.open_dataset(
-        f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+        f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear}_{endyear}.nc"
     )
     assign_bcd = assign_w_6hr(bcd, bc_boundary)
     bcd_3d, fraction_factors_bcd = convert_to_daily_with_fraction(assign_bcd)
@@ -1067,12 +1071,12 @@ def save_figure_3d(file_paths_by_variable_gcm, file_paths_by_variable_obs, level
     if config.sub_daily_correction:
         print("K-S test has been included")
         compute_ks_comparison(
-            fraction_factors_obs,
-            fraction_factors_gcm,
-            fraction_factors_bcd,
+            fraction_factors_obs.compute(),
+            fraction_factors_gcm.compute(),
+            fraction_factors_bcd.compute(),
             variables,
             level,
-            config.output_figure_path,
+            config.out_figure_path,
             intervals=(0, 6, 12, 18),
         )
     # Remove the temporary directory and its contents

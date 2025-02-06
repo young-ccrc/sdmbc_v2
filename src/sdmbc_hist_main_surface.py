@@ -29,6 +29,7 @@ import os
 import shutil
 import time  # Import the time module
 import warnings
+from multiprocessing import Pool, cpu_count
 from types import SimpleNamespace
 
 # import dask  # type: ignore
@@ -41,7 +42,8 @@ from tqdm import tqdm  # type: ignore
 
 # import yaml  # type: ignore
 from bc_grid_function import (  # type: ignore
-    bc_correction_grid_cell_future_daily_dask_2d,
+    bc_correction_grid_cell_future_dask_2d,
+    bc_correction_grid_cell_future_multiprocess,
     bc_correction_grid_cell_hist_dask_2d,
 )
 from config import config  # type: ignore
@@ -556,8 +558,11 @@ def main(config):
     if (
         config.bc_future
     ):  # ========================= future bias correction =========================
+        # Record the start time for this level
+        start_time = time.time()
+        level = 0
         sliced_gcm_future = load_and_combine_variables(
-            variables, startyear_f, endyear_f, data_type="validation_gcm"
+            variables, level, startyear_f, endyear_f, data_type="validation_gcm"
         )
 
         reshaped_gcm_delayed_f = extract_and_reshape_delayed(
@@ -566,7 +571,7 @@ def main(config):
         reshaped_gcm_delayed_f += 273.15
 
         bc_params_array_loaded = np.load(
-            f"{out_path}/bc_params_2d_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
+            f"{config.out_path}/bc_params_2d_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
             allow_pickle=True,
         )
 
@@ -579,77 +584,89 @@ def main(config):
                     bc_params_array_loaded[i, j]
                 )
 
-        reshaped_gcm_delayed_f = reshaped_gcm_delayed_f.astype("float32")
+        # reshaped_gcm_delayed_f = reshaped_gcm_delayed_f.astype("float32")
 
-        n_lat_tiles, n_lon_tiles = determine_tiles(
-            reshaped_gcm_delayed_f, lat_min, lat_max, lon_min, lon_max
-        )
-        print(f"Generated {n_lat_tiles} x {n_lon_tiles} tiles.")
+        # n_lat_tiles, n_lon_tiles = determine_tiles(
+        #     reshaped_gcm_delayed_f, lat_min, lat_max, lon_min, lon_max
+        # )
+        # print(f"Generated {n_lat_tiles} x {n_lon_tiles} tiles.")
 
         # Create a temporary folder for saving intermediate files
         temp_dir = os.path.join(out_path, "temp_tiles_surface")
         os.makedirs(temp_dir, exist_ok=True)
 
-        print("start dask bc correction")
+        # print("start dask bc correction")
 
-        tiles = split_domain(
-            lat_min,
-            lat_max,
-            lon_min,
-            lon_max,
-            n_lat_tiles=n_lat_tiles,
-            n_lon_tiles=n_lon_tiles,
+        # tiles = split_domain(
+        #     lat_min,
+        #     lat_max,
+        #     lon_min,
+        #     lon_max,
+        #     n_lat_tiles=n_lat_tiles,
+        #     n_lon_tiles=n_lon_tiles,
+        # )
+
+        # # for idx, tile in enumerate(tiles):
+        # for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
+        #     try:
+        #         lat_range = (tile["lat_min"], tile["lat_max"])
+        #         lon_range = (tile["lon_min"], tile["lon_max"])
+
+        #         # Slice GCM and Obs data for the tile
+        #         reshaped_gcm_delayed_tile = reshaped_gcm_delayed_f.sel(
+        #             lat=slice(*lat_range), lon=slice(*lon_range)
+        #         )
+        #         # print("reshaped_tile")
+        #         # print(reshaped_gcm_delayed_tile)
+
+        #         bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_dask_2d(
+        #             reshaped_gcm_delayed_tile,
+        #             bc_params_array_loaded,
+        #             startyear_f,
+        #             endyear_f,
+        #             var_list_w,
+        #         )
+        #         # print("bc done and ready to save")
+        #         # Save each tile's bias-corrected output immediately to disk
+        #         output_file = f"{temp_dir}/bc_corrected_future_tile_2d_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+        #         bc_corrected_gcm_future_tile.compute().to_netcdf(
+        #             output_file
+        #         )  # Save tile result
+
+        #         # Free memory after saving each tile
+        #         del bc_corrected_gcm_future_tile
+        #         # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
+
+        #     except Exception as e:
+        #         print(f"Error processing tile {idx}: {e}")
+        #         continue
+        print("Start multiprocessing for bias correction...")
+
+        bc_corrected_gcm_future = bc_correction_grid_cell_future_multiprocess(
+            reshaped_gcm_delayed_f,
+            bc_params_array_loaded,
+            var_list_w,
         )
 
-        # for idx, tile in enumerate(tiles):
-        for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
-            try:
-                lat_range = (tile["lat_min"], tile["lat_max"])
-                lon_range = (tile["lon_min"], tile["lon_max"])
-
-                # Slice GCM and Obs data for the tile
-                reshaped_gcm_delayed_tile = reshaped_gcm_delayed_f.sel(
-                    lat=slice(*lat_range), lon=slice(*lon_range)
-                )
-                # print("reshaped_tile")
-                print(reshaped_gcm_delayed_tile)
-
-                bc_corrected_gcm_future_tile = (
-                    bc_correction_grid_cell_future_daily_dask_2d(
-                        reshaped_gcm_delayed_tile,
-                        bc_params_array_loaded,
-                        startyear_f,
-                        endyear_f,
-                        var_list_w,
-                    )
-                )
-                # print("bc done and ready to save")
-                # Save each tile's bias-corrected output immediately to disk
-                output_file = f"{temp_dir}/bc_corrected_future_tile_2d_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
-                bc_corrected_gcm_future_tile.compute().to_netcdf(
-                    output_file
-                )  # Save tile result
-
-                # Free memory after saving each tile
-                del bc_corrected_gcm_future_tile
-                # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
-
-            except Exception as e:
-                print(f"Error processing tile {idx}: {e}")
-                continue
+        # Save results to NetCDF
+        output_file = (
+            f"{temp_dir}/bc_corrected_future_2d_{gname}_{startyear_f}_{endyear_f}.nc"
+        )
+        bc_corrected_gcm_future.to_netcdf(output_file)
 
         # Concatenate all bc_params along the latitude and longitude
         # Initialize an empty list to hold rows of tiles for each latitude band
         lat_band_tiles = []
 
         # Load the bias-corrected tiles and combine them into a single dataset
-        tile_files = [
-            f"{temp_dir}/bc_corrected_future_tile_2d_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
-            for idx, tile in enumerate(tiles)
-        ]
-        full_bc_corrected = xr.open_mfdataset(
-            tile_files, combine="by_coords"
-        )  # Combine by matching coordinates
+        # tile_files = [
+        #     f"{temp_dir}/bc_corrected_future_tile_2d_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+        #     for idx, tile in enumerate(tiles)
+        # ]
+        # full_bc_corrected = xr.open_mfdataset(
+        #     tile_files, combine="by_coords"
+        # )  # Combine by matching coordinates
+        full_bc_corrected = xr.open_dataset(output_file)
 
         # Extract the original latitude and longitude values (with duplicates)
         original_lat_values = full_bc_corrected["lat"].values

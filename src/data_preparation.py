@@ -235,14 +235,14 @@ def generate_file_paths(
                     # Include December of the year before start_year if focusing on a period starting from 1982 or later
                     prev_dec_path = (
                         f"{base_path}/{variable}/{sinfor}/v{version}/"
-                        f"{variable}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{year-1}*.nc"
+                        f"{variable}_{infor}_{gname}_*_{cinfor}_{sinfor}_{year-1}*.nc"
                     )
                     file_paths.extend(glob.glob(prev_dec_path))
 
             # Pattern for the main year of interest, adjusted to include the broadest possible match
             file_path_pattern = (
                 f"{base_path}/{variable}/{sinfor}/v{version}/"
-                f"{variable}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{year}*.nc"
+                f"{variable}_{infor}_{gname}_*_{cinfor}_{sinfor}_{year}*.nc"
             )
             matching_file_paths = glob.glob(file_path_pattern)
             file_paths.extend(matching_file_paths)
@@ -371,7 +371,7 @@ def load_preprocess_variable(
     ds = xr.open_mfdataset(
         file_paths,
         combine="by_coords",
-        chunks={"time": 1000, "lat": "auto", "lon": "auto"},
+        chunks={"time": "auto", "lat": "auto", "lon": "auto"},
     )
     # print(ds)
     if config.bc_boundary == "lateral":
@@ -971,7 +971,7 @@ def convert_6hr_to_original_xr(bias_corrected_data_xr, g_u_xr, g_v_xr):
     return converted_data_xr
 
 
-def determine_tiles(ds_tile, lat_min, lat_max, lon_min, lon_max):
+def determine_tiles(file_paths, var, lat_min, lat_max, lon_min, lon_max):
     """
     Determines the number of tiles based on the total number of grid points.
 
@@ -981,7 +981,8 @@ def determine_tiles(ds_tile, lat_min, lat_max, lon_min, lon_max):
     Returns:
         (int, int): Number of tiles for latitude and longitude.
     """
-    # ds_tile = xr.open_dataset(file_paths[var][0])
+
+    ds_tile = xr.open_dataset(file_paths[var][0])
     max_tile_size = 300
     # Use the first variable's file paths to determine grid size
     ds_tile = ds_tile.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
@@ -1063,14 +1064,16 @@ def generate_file_paths_future(variable, start_year, end_year, data_type):
                 base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(year)
                 file_path_pattern_gcm = (
                     f"{base_path}/{variable}/{sinf}/v{vers}/"
-                    f"{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year}*.nc"
+                    f"{variable}_{info}_{gna}_*_{cinf}_{sinf}_{year}*.nc"
                 )
-            elif data_type == "validation_gcm":
+                file_paths.extend(glob.glob(file_path_pattern_gcm))
+            elif data_type == "validation":
                 base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(year)
                 file_path_pattern_gcm = (
                     f"{base_path}/{variable}/{sinf}/v{vers}/"
-                    f"{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year}*.nc"
+                    f"{variable}_{info}_{gna}_*_{cinf}_{sinf}_{year}*.nc"
                 )
+                file_paths.extend(glob.glob(file_path_pattern_gcm))
             # Include data from the previous December for specific cases (future GCM only)
             if (
                 data_type == "future"
@@ -1079,7 +1082,7 @@ def generate_file_paths_future(variable, start_year, end_year, data_type):
             ):
                 prev_dec_path = (
                     f"{base_path}/{variable}/{sinf}/v{vers}/"
-                    f"{variable}_{info}_{gna}_{peri}_{cinf}_{sinf}_{year-1}12*.nc"
+                    f"{variable}_{info}_{gna}_*_{cinf}_{sinf}_{year-1}12*.nc"
                 )
                 file_paths.extend(glob.glob(prev_dec_path))
 
@@ -1094,7 +1097,7 @@ def generate_file_paths_future(variable, start_year, end_year, data_type):
     return file_paths
 
 
-def load_and_combine_variables(variables, start_year, end_year, data_type):
+def load_and_combine_variables(variables, level, start_year, end_year, data_type):
     """
     Load and combine historical and future GCM data for given variables
     over specified year ranges.
@@ -1105,18 +1108,131 @@ def load_and_combine_variables(variables, start_year, end_year, data_type):
     sliced_ds_hist = xr.Dataset()
     sliced_ds_future = xr.Dataset()
 
-    # Handle historical data if start_year is before 2015
+    # # Handle historical data if start_year is before 2015
+    # if config.bc_boundary == "lateral":
+    #     if start_year < 2015:
+    #         hist_end_year = min(end_year, 2014)
+    #         for variable in variables:
+    #             file_paths = generate_file_paths_future(
+    #                 variable, start_year - 1, hist_end_year, data_type=data_type
+    #             )
+    #             data_var = load_preprocess_variable(
+    #                 file_paths,
+    #                 variable,
+    #                 level,
+    #                 lat_range,
+    #                 lon_range,
+    #                 start_year,
+    #                 hist_end_year,
+    #             )
+    #             if variable in ["ua", "va"]:
+    #                 target_lon = (
+    #                     sliced_ds_hist.lon if "lon" in sliced_ds_hist else data_var.lon
+    #                 )
+    #                 target_lat = (
+    #                     sliced_ds_hist.lat if "lat" in sliced_ds_hist else data_var.lat
+    #                 )
+    #                 target_lev = (
+    #                     sliced_ds_hist.lev if "lev" in sliced_ds_hist else data_var.lev
+    #                 )
+    #                 data_var = data_var.interp(
+    #                     lat=target_lat,
+    #                     lon=target_lon,
+    #                     method="linear",
+    #                     kwargs={"fill_value": "extrapolate"},
+    #                 ).assign_coords(lon=target_lon, lat=target_lat, lev=target_lev)
+    #             sliced_ds_hist[variable] = data_var
+
+    #     # Handle future data if end_year is 2015 or later
+    #     if end_year >= 2015:
+    #         future_start_year = max(start_year, 2015)
+    #         for variable in variables:
+    #             file_paths = generate_file_paths_future(
+    #                 variable, future_start_year - 1, end_year, data_type=data_type
+    #             )
+    #             data_var_h = load_preprocess_variable(
+    #                 file_paths[0],
+    #                 variable,
+    #                 level,
+    #                 lat_range,
+    #                 lon_range,
+    #                 future_start_year,
+    #                 end_year,
+    #             )
+    #             data_var_f = load_preprocess_variable(
+    #                 file_paths[1:],
+    #                 variable,
+    #                 level,
+    #                 lat_range,
+    #                 lon_range,
+    #                 future_start_year,
+    #                 end_year,
+    #             )
+    #             if variable in ["ua", "va"]:
+    #                 target_lon = (
+    #                     sliced_ds_future.lon
+    #                     if "lon" in sliced_ds_future
+    #                     else data_var.lon
+    #                 )
+    #                 target_lat = (
+    #                     sliced_ds_future.lat
+    #                     if "lat" in sliced_ds_future
+    #                     else data_var.lat
+    #                 )
+    #                 target_lev = (
+    #                     sliced_ds_future.lev
+    #                     if "lev" in sliced_ds_future
+    #                     else data_var.lev
+    #                 )
+    #                 data_var_h = data_var_h.interp(
+    #                     lat=target_lat,
+    #                     lon=target_lon,
+    #                     method="linear",
+    #                     kwargs={"fill_value": "extrapolate"},
+    #                 ).assign_coords(lon=target_lon, lat=target_lat, lev=target_lev)
+    #                 data_var_f = data_var_f.interp(
+    #                     lat=target_lat,
+    #                     lon=target_lon,
+    #                     method="linear",
+    #                     kwargs={"fill_value": "extrapolate"},
+    #                 ).assign_coords(lon=target_lon, lat=target_lat, lev=target_lev)
+    #             data_var = xr.combine_by_coords([data_var_h, data_var_f])
+    #             sliced_ds_future[variable] = data_var[variable]
+
+    # elif config.bc_boundary == "surface":
+    #     for variable in variables:
+    #         file_paths = generate_file_paths_future(
+    #             variable, start_year, end_year, data_type=data_type
+    #         )
+    #         data_var = load_preprocess_variable(
+    #             file_paths,
+    #             variable,
+    #             level,
+    #             lat_range,
+    #             lon_range,
+    #             start_year,
+    #             end_year,
+    #         )
+    #         sliced_ds_hist[variable] = data_var
+
+    # # Combine historical and future datasets if both exist
+    # combined_ds = xr.combine_by_coords(
+    #     [sliced_ds_hist, sliced_ds_future]
+    #     if sliced_ds_hist and sliced_ds_future
+    #     else ([sliced_ds_hist] if sliced_ds_hist else [sliced_ds_future])
+    # )
     if config.bc_boundary == "lateral":
         if start_year < 2015:
             hist_end_year = min(end_year, 2014)
             for variable in variables:
                 file_paths = generate_file_paths_future(
-                    variable, start_year, hist_end_year, data_type=data_type
+                    variable, start_year - 1, hist_end_year, data_type=data_type
                 )
+                # print(file_paths)
                 data_var = load_preprocess_variable(
                     file_paths,
                     variable,
-                    config.slevel,
+                    level,
                     lat_range,
                     lon_range,
                     start_year,
@@ -1145,17 +1261,29 @@ def load_and_combine_variables(variables, start_year, end_year, data_type):
             future_start_year = max(start_year, 2015)
             for variable in variables:
                 file_paths = generate_file_paths_future(
-                    variable, future_start_year, end_year, data_type=data_type
+                    variable, future_start_year - 1, end_year, data_type=data_type
                 )
-                data_var = load_preprocess_variable(
-                    file_paths,
+                # print('>2015', file_paths)
+                data_var_h = load_preprocess_variable(
+                    file_paths[0],
                     variable,
-                    config.slevel,
-                    config.lat_range,
-                    config.lon_range,
+                    level,
+                    lat_range,
+                    lon_range,
                     future_start_year,
                     end_year,
                 )
+                data_var_f = load_preprocess_variable(
+                    file_paths[1:],
+                    variable,
+                    level,
+                    lat_range,
+                    lon_range,
+                    future_start_year,
+                    end_year,
+                )
+                print(data_var_h)
+                print(data_var_f)
                 if variable in ["ua", "va"]:
                     target_lon = (
                         sliced_ds_future.lon
@@ -1172,29 +1300,34 @@ def load_and_combine_variables(variables, start_year, end_year, data_type):
                         if "lev" in sliced_ds_future
                         else data_var.lev
                     )
-                    data_var = data_var.interp(
+                    data_var_h = data_var_h.interp(
                         lat=target_lat,
                         lon=target_lon,
                         method="linear",
                         kwargs={"fill_value": "extrapolate"},
                     ).assign_coords(lon=target_lon, lat=target_lat, lev=target_lev)
-                sliced_ds_future[variable] = data_var
-
+                    data_var_f = data_var_f.interp(
+                        lat=target_lat,
+                        lon=target_lon,
+                        method="linear",
+                        kwargs={"fill_value": "extrapolate"},
+                    ).assign_coords(lon=target_lon, lat=target_lat, lev=target_lev)
+                data_var = xr.combine_by_coords([data_var_h, data_var_f])
+                sliced_ds_future[variable] = data_var[variable]
     elif config.bc_boundary == "surface":
         for variable in variables:
             file_paths = generate_file_paths_future(
                 variable, start_year, end_year, data_type=data_type
             )
             data_var = load_preprocess_variable(
-                file_paths,
-                variable,
-                config.slevel,
-                lat_range,
-                lon_range,
-                start_year,
-                end_year,
+                file_paths, variable, level, lat_range, lon_range, start_year, end_year
             )
             sliced_ds_hist[variable] = data_var
+
+    for var in sliced_ds_hist.data_vars:
+        sliced_ds_hist[var].attrs = {}
+    for var in sliced_ds_future.data_vars:
+        sliced_ds_future[var].attrs = {}
 
     # Combine historical and future datasets if both exist
     combined_ds = xr.combine_by_coords(
@@ -1202,7 +1335,6 @@ def load_and_combine_variables(variables, start_year, end_year, data_type):
         if sliced_ds_hist and sliced_ds_future
         else ([sliced_ds_hist] if sliced_ds_hist else [sliced_ds_future])
     )
-
     return combined_ds
 
 
