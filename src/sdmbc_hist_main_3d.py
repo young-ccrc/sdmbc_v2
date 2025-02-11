@@ -1,4 +1,5 @@
 import argparse
+import logging
 import math
 import os
 import shutil
@@ -16,8 +17,13 @@ from dask.distributed import Client  # type: ignore
 from tqdm import tqdm  # type: ignore
 
 # import yaml  # type: ignore
-from bc_grid_function import preprocess_and_save_obs  # type: ignore
-from bc_grid_function import process_tile, process_tile_future  # type: ignore
+from bc_grid_function import load_preprocess_variable  # type: ignore
+from bc_grid_function import (
+    preprocess_and_save_gcm,
+    preprocess_and_save_obs,
+    process_tile,
+    process_tile_future,
+)
 from config import config  # type: ignore
 
 # from data_preparation import   # type: ignore
@@ -29,6 +35,11 @@ from data_preparation import (
     validate_inputs,
 )
 from figurefunction import save_figure_3d
+
+# Suppress INFO and lower-level logs
+logging.getLogger("flox").setLevel(logging.WARNING)
+logging.getLogger("xarray").setLevel(logging.WARNING)
+logging.getLogger("dask").setLevel(logging.WARNING)
 
 # sys.path.append("/g/data/w28/yk8692/sdmbc_v2/sdmbc_v2")
 
@@ -145,16 +156,7 @@ def main(config):
     # Validate inputs
     if config.bc_future:
         bc_future_path = config.bc_future_path
-        startyear_f = config.startyear_f
-        endyear_f = config.endyear_f
-        infor_f = config.infor_f
-        gname_f = config.gname_f
         period_f = config.period_f
-        cinfor_f = config.cinfor_f
-        sinfor_f = config.sinfor_f
-        version_f = config.version_f
-        scenario = config.scenario
-        cinfor_f = config.cinfor_f
 
     # Validate inputs
     validate_inputs(lat_min, lat_max)
@@ -222,41 +224,95 @@ def main(config):
         n_lon_tiles=n_lon_tiles,
     )
 
+    domain = split_domain(
+        lat_min,
+        lat_max,
+        lon_min,
+        lon_max,
+        n_lat_tiles=1,
+        n_lon_tiles=1,
+    )
+
     for level in range(slevel, elevel + 1):
         # Record the start time for this level
         start_time = time.time()
-
+        lat_range = (lat_min, lat_max)
+        lon_range = (lon_min, lon_max)
         print(f"Starting processing for level {level}")
+
+        temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{level}")
+        os.makedirs(temp_dir, exist_ok=True)
+        # ------------------ Load GCM Data ------------------
+        temp_gcm = preprocess_and_save_gcm(
+            domain,
+            file_paths_by_variable_gcm,
+            temp_dir,
+            level,
+        )
+        sliced_gcm = xr.open_dataset(
+            f"{temp_dir}/preprocessed_{gname}_lev_{level}_{lat_min}_{lat_max}_{lon_min}_{lon_max}.nc"
+        )
+
+        # ------------------ Load GCM Data end ------------------
+
+        # ------------------ Load Obs Data ------------------
+        for var_name, file_paths in file_paths_by_variable_obs.items():
+            temp_netcdf = preprocess_and_save_obs(
+                domain,
+                file_paths,
+                temp_dir,
+                var_name,
+                level,
+                startyear_h,
+                endyear_h,
+            )
+        sliced_obs = xr.Dataset()
+        for var_name in variables:
+            # Construct the path to the preprocessed file for this variable
+            obs_file = os.path.join(
+                temp_dir,
+                f"preprocessed_obs_{var_name}_lev_{level}_{float(lat_min)}_{float(lat_max)}_{float(lon_min)}_{float(lon_max)}.nc",
+            )
+            sliced_obs[var_name] = xr.open_dataset(obs_file)[
+                var_name
+            ]  # Load the variable from the file
+
+        sliced_obs = sliced_obs.astype("float32")
+        # ------------------ Load Obs Data end ------------------
 
         if config.bc_hist:
 
-            temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{slevel}_{elevel}")
-            os.makedirs(temp_dir, exist_ok=True)
-
             # To store all bc_params for later concatenation
             all_bc_params = []
-            # for idx, tile in enumerate(tiles):
+            # # for idx, tile in enumerate(tiles):
             for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
-                for var_name, file_paths in file_paths_by_variable_obs.items():
-                    temp_netcdf = preprocess_and_save_obs(
-                        tile,
-                        file_paths,
-                        temp_dir,
-                        var_name,
-                        level,
-                        lat_min,
-                        lat_max,
-                        lon_min,
-                        lon_max,
-                        startyear_h,
-                        endyear_h,
-                    )
-
+                #     for var_name, file_paths in file_paths_by_variable_obs.items():
+                #         temp_netcdf = preprocess_and_save_obs(
+                #             tile,
+                #             file_paths,
+                #             temp_dir,
+                #             var_name,
+                #             level,
+                #             lat_min,
+                #             lat_max,
+                #             lon_min,
+                #             lon_max,
+                #             startyear_h,
+                #             endyear_h,
+                #         )
+                lat_range = (tile["lat_min"], tile["lat_max"])
+                lon_range = (tile["lon_min"], tile["lon_max"])
                 try:
                     # Define output file paths
                     output_file = f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
                     output_params = f"{temp_dir}/bc_params_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.npy"
 
+                    obs_tile = sliced_obs.sel(
+                        lat=slice(*lat_range), lon=slice(*lon_range)
+                    )
+                    gcm_tile = sliced_gcm.sel(
+                        lat=slice(*lat_range), lon=slice(*lon_range)
+                    )
                     # # Check if both output files already exist
                     # if os.path.exists(output_file) and os.path.exists(output_params):
                     #     print(
@@ -267,12 +323,9 @@ def main(config):
                     # Process the tile if either output is missing
                     print(f"Processing tile {idx}, level {level}...")
                     bc_corrected_gcm_hist_tile, bc_params_tile = process_tile(
-                        tile,
-                        variables,
-                        file_paths_by_variable_gcm,
-                        level,
+                        gcm_tile,
+                        obs_tile,
                         config,
-                        temp_dir,
                     )
 
                     # Save the bias-corrected output
@@ -444,26 +497,23 @@ def main(config):
 
         if config.bc_future:
 
-            temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{slevel}_{elevel}")
-            os.makedirs(temp_dir, exist_ok=True)
-
             for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
                 # try:
-                if config.bc_hist == False:
-                    for var_name, file_paths in file_paths_by_variable_obs.items():
-                        temp_netcdf = preprocess_and_save_obs(
-                            tile,
-                            file_paths,
-                            temp_dir,
-                            var_name,
-                            level,
-                            lat_min,
-                            lat_max,
-                            lon_min,
-                            lon_max,
-                            startyear_h,
-                            endyear_h,
-                        )
+                # if config.bc_hist == False:
+                #     for var_name, file_paths in file_paths_by_variable_obs.items():
+                #         temp_netcdf = preprocess_and_save_obs(
+                #             tile,
+                #             file_paths,
+                #             temp_dir,
+                #             var_name,
+                #             level,
+                #             lat_min,
+                #             lat_max,
+                #             lon_min,
+                #             lon_max,
+                #             startyear_h,
+                #             endyear_h,
+                #         )
                 # Define output file paths
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_{period_f}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
 
@@ -472,8 +522,8 @@ def main(config):
                     variables,
                     level,
                     config,
-                    file_paths_by_variable_gcm,
-                    temp_dir,
+                    sliced_gcm,
+                    sliced_obs,
                 )
 
                 # Save the bias-corrected output

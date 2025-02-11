@@ -139,6 +139,28 @@ def cal_std(ds):
     return dsd
 
 
+# Climatological mean
+def cal_mean_2d(ds):
+    """
+    Calculate the climatological mean of a given dataset ds over different time periods.
+
+    """
+    dss = ds.groupby("time.season").mean("time").mean("season")
+
+    return dss
+
+
+# Standard deviation
+def cal_std_2d(ds):
+    """
+    Calculate the standard deviation of a given dataset ds over different time periods.
+
+    """
+    dss = ds.resample(time="QS-DEC").mean("time").std("time")
+
+    return dss
+
+
 # Lag1 auto-correlation
 # def cal_acor(ds, period, variable):  # period: M, QS-DEC, Y
 #     """
@@ -1118,38 +1140,42 @@ def save_figure_surface(g_sst, d_sst, e_sst, out_figure_path):
     out_figure_path: a string representing the path where the output figure will be saved
 
     """
-    variable = "tos"
+
     # Statistics calculation =======================
     print("Calculate statistics")
     # calculate mean over whole periods
-    d_d, d_m, d_s, d_y = cal_mean(d_sst)
-    e_d, e_m, e_s, e_y = cal_mean(e_sst)
-    g_d, g_m, g_s, g_y = cal_mean(g_sst)
+    d_s = cal_mean_2d(d_sst)
+    e_s = cal_mean_2d(e_sst)
+    g_s = cal_mean_2d(g_sst)
 
     # calculate std over whole periods
-    d_ds, d_ms, d_ss, d_ys = cal_std(d_sst)
-    e_ds, e_ms, e_ss, e_ys = cal_std(e_sst)
-    g_ds, g_ms, g_ss, g_ys = cal_std(g_sst)
+    d_ss = cal_std_2d(d_sst)
+    e_ss = cal_std_2d(e_sst)
+    g_ss = cal_std_2d(g_sst)
 
     # calculate auto-corr over whole periods
-    d_da, d_ma, d_sa, d_ya = (
-        cal_acor_sst(d_sst, "D"),
-        cal_acor_sst(d_sst, "M"),
-        cal_acor_sst(d_sst, "QS-DEC"),
-        cal_acor_sst(d_sst, "Y"),
-    )
-    e_da, e_ma, e_sa, e_ya = (
-        cal_acor_sst(e_sst, "D"),
-        cal_acor_sst(e_sst, "M"),
-        cal_acor_sst(e_sst, "QS-DEC"),
-        cal_acor_sst(e_sst, "Y"),
-    )
-    g_da, g_ma, g_sa, g_ya = (
-        cal_acor_sst(g_sst, "D"),
-        cal_acor_sst(g_sst, "M"),
-        cal_acor_sst(g_sst, "QS-DEC"),
-        cal_acor_sst(g_sst, "Y"),
-    )
+    # d_da, d_ma, d_sa, d_ya = (
+    #     cal_acor_sst(d_sst, "D"),
+    #     cal_acor_sst(d_sst, "M"),
+    #     cal_acor_sst(d_sst, "QS-DEC"),
+    #     cal_acor_sst(d_sst, "Y"),
+    # )
+    # e_da, e_ma, e_sa, e_ya = (
+    #     cal_acor_sst(e_sst, "D"),
+    #     cal_acor_sst(e_sst, "M"),
+    #     cal_acor_sst(e_sst, "QS-DEC"),
+    #     cal_acor_sst(e_sst, "Y"),
+    # )
+    # g_da, g_ma, g_sa, g_ya = (
+    #     cal_acor_sst(g_sst, "D"),
+    #     cal_acor_sst(g_sst, "M"),
+    #     cal_acor_sst(g_sst, "QS-DEC"),
+    #     cal_acor_sst(g_sst, "Y"),
+    # )
+
+    d_sa = cal_acor_sst(d_sst, "QS-DEC")
+    e_sa = cal_acor_sst(e_sst, "QS-DEC")
+    g_sa = cal_acor_sst(g_sst, "QS-DEC")
 
     # nan where e is zero
     g_ss = xr.where(e_ss == 0, np.nan, g_ss)

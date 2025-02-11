@@ -36,6 +36,7 @@ Modules Imported:
 """
 
 import glob
+import logging
 import math
 import re
 
@@ -48,6 +49,11 @@ import xarray as xr  # type: ignore
 import yaml  # type: ignore
 
 from config import config
+
+# Suppress INFO and lower-level logs
+logging.getLogger("flox").setLevel(logging.WARNING)
+logging.getLogger("xarray").setLevel(logging.WARNING)
+logging.getLogger("dask").setLevel(logging.WARNING)
 
 # import os
 # import sys
@@ -983,7 +989,7 @@ def determine_tiles(file_paths, var, lat_min, lat_max, lon_min, lon_max):
     """
 
     ds_tile = xr.open_dataset(file_paths[var][0])
-    max_tile_size = 300
+    max_tile_size = 2000
     # Use the first variable's file paths to determine grid size
     ds_tile = ds_tile.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
     lat_size = ds_tile.sizes["lat"]
@@ -1097,13 +1103,13 @@ def generate_file_paths_future(variable, start_year, end_year, data_type):
     return file_paths
 
 
-def load_and_combine_variables(variables, level, start_year, end_year, data_type):
+def load_and_combine_variables(tile, variables, level, start_year, end_year, data_type):
     """
     Load and combine historical and future GCM data for given variables
     over specified year ranges.
     """
-    lat_range = (config.lat_min, config.lat_max)  # Adjust as needed
-    lon_range = (config.lon_min, config.lon_max)  # Adjust as needed
+    lat_range = (tile["lat_min"], tile["lat_max"])  # Adjust as needed
+    lon_range = (tile["lon_min"], tile["lon_max"])  # Adjust as needed
 
     sliced_ds_hist = xr.Dataset()
     sliced_ds_future = xr.Dataset()
