@@ -1,0 +1,24 @@
+
+#!/bin/bash
+#PBS -m ae
+#PBS -P n81
+#PBS -q normal
+#PBS -l walltime=12:00:00
+#PBS -l mem=190GB
+#PBS -l ncpus=48
+#PBS -j oe
+#PBS -l wd
+#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/hh5+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
+echo "Starting time:"
+date
+
+echo "Module load"
+module use /g/data3/hh5/public/modules
+module load conda/analysis3-24.01
+
+echo "Starting interpolation"
+
+python interp_obs2gcm.py --yp /scratch/dm6/yk8692/interpolation/config_interp.yaml --var ta
+
+echo "Ending time:"
+date
