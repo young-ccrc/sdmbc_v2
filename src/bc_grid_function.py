@@ -502,7 +502,6 @@ def process_tile(
 
 
 def future_subdaily_correction(
-    tile,
     sliced_gcm,
     sliced_obs,
     ff_future,
@@ -607,16 +606,58 @@ def future_subdaily_correction(
         config.endyear_f,
     )
 
-    if "lev" not in six_hourly_data_future.dims:
+    if (
+        "lev" in six_hourly_data_future.coords
+        and "lev" not in six_hourly_data_future.dims
+    ):
+        six_hourly_data_future = six_hourly_data_future.drop_vars(
+            "lev"
+        )  # Remove as a coordinate
         six_hourly_data_future = six_hourly_data_future.expand_dims(
             lev=[ff_gcm.lev.values]
-        )
-
+        )  # Add as a dimension
     return six_hourly_data_future
 
 
 def dict_to_simplenamespace(d):
     return SimpleNamespace(**d)
+
+
+def load_bc_params_subset(
+    file_path, lat_values, lon_values, lat_min, lat_max, lon_min, lon_max
+):
+    """
+    Load only the required subset of bc_params from a large npy file, based on latitude and longitude range.
+
+    Args:
+        file_path (str): Path to the `.npy` file.
+        lat_values (np.ndarray): Latitude values corresponding to bc_params indices.
+        lon_values (np.ndarray): Longitude values corresponding to bc_params indices.
+        lat_min (float): Minimum latitude to select.
+        lat_max (float): Maximum latitude to select.
+        lon_min (float): Minimum longitude to select.
+        lon_max (float): Maximum longitude to select.
+
+    Returns:
+        np.ndarray: Subset of bc_params with selected lat/lon indices.
+    """
+
+    # Load the full file (necessary since dtype=object)
+    bc_params_array = np.load(file_path, allow_pickle=True)  # Remove mmap_mode
+
+    # Find indices for the latitude and longitude range
+    lat_indices = np.where((lat_values >= lat_min) & (lat_values <= lat_max))[0]
+    lon_indices = np.where((lon_values >= lon_min) & (lon_values <= lon_max))[0]
+
+    # Select only the needed subset
+    bc_params_subset = bc_params_array[np.ix_(lat_indices, lon_indices)]
+
+    # Convert dictionaries to SimpleNamespace for easy access
+    for i in range(bc_params_subset.shape[0]):
+        for j in range(bc_params_subset.shape[1]):
+            bc_params_subset[i, j] = SimpleNamespace(**bc_params_subset[i, j])
+
+    return bc_params_subset
 
 
 def process_tile_future(
@@ -666,18 +707,19 @@ def process_tile_future(
         config.endyear_f,
         config.bc_boundary,
     )
-
-    bc_params_array_loaded = np.load(
-        f"{config.out_path}/bc_params_3d_{config.period}_lev_{level}_{config.gname}_to_{config.input_model}_{config.startyear_h}_{config.endyear_h}.npy",
-        allow_pickle=True,
+    bc_params_array_loaded = load_bc_params_subset(
+        config.out_path,
+        daily_gcm.lat.values,
+        daily_gcm.lon.values,
+        config.lat_min,
+        config.lat_max,
+        config.lon_min,
+        config.lon_max,
     )
-
-    # Assuming the shape is (1, 3) and contains dictionaries
-    for i in range(bc_params_array_loaded.shape[0]):
-        for j in range(bc_params_array_loaded.shape[1]):
-            bc_params_array_loaded[i, j] = dict_to_simplenamespace(
-                bc_params_array_loaded[i, j]
-            )
+    # bc_params_array_loaded = np.load(
+    #     f"{config.out_path}/bc_params_3d_{config.period}_lev_{level}_{config.gname}_to_{config.input_model}_{config.startyear_h}_{config.endyear_h}.npy",
+    #     allow_pickle=True,
+    # )
 
     # Perform bias correction across the tile
     # bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_dask(
@@ -690,15 +732,13 @@ def process_tile_future(
         bc_params_array_loaded,
         var_list_w,
     )
-
+    print(bc_corrected_gcm_future_tile)
     if config.sub_daily_correction:
         bc_corrected_gcm_future = future_subdaily_correction(
-            tile,
             gcm_hist,
             obs_hist,
             ff_future,
             bc_corrected_gcm_future_tile,
-            level,
             config,
         )
     else:
@@ -710,7 +750,11 @@ def process_tile_future(
             config.endyear_f,
         )
 
-    return bc_corrected_gcm_future
+    bc_corrected_6hourly_data = apply_boundary_correction(
+        bc_corrected_gcm_future, sliced_gcm
+    )
+
+    return bc_corrected_6hourly_data
 
 
 def bc_correction_grid_cell_future_dask(
@@ -1411,7 +1455,8 @@ def bc_correction_grid_cell_future_multiprocess(gcm_future, bc_params_array, var
 
     # Use multiprocessing Pool
     num_workers = cpu_count()  # Get number of CPU cores
-    n = min(len(os.sched_getaffinity(0)), num_workers, 96)
+    n = num_workers
+    # n = min(len(os.sched_getaffinity(0)), num_workers, 96)
     print(f"Using {n} CPU cores for parallel processing...")
 
     with Pool(processes=n) as pool:

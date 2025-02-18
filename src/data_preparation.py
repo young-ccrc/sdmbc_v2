@@ -989,7 +989,7 @@ def determine_tiles(file_paths, var, lat_min, lat_max, lon_min, lon_max):
     """
 
     ds_tile = xr.open_dataset(file_paths[var][0])
-    max_tile_size = 2000
+    max_tile_size = 1000
     # Use the first variable's file paths to determine grid size
     ds_tile = ds_tile.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
     lat_size = ds_tile.sizes["lat"]
@@ -1288,8 +1288,8 @@ def load_and_combine_variables(tile, variables, level, start_year, end_year, dat
                     future_start_year,
                     end_year,
                 )
-                print(data_var_h)
-                print(data_var_f)
+                # print(data_var_h)
+                # print(data_var_f)
                 if variable in ["ua", "va"]:
                     target_lon = (
                         sliced_ds_future.lon

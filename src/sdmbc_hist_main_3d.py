@@ -157,6 +157,8 @@ def main(config):
     if config.bc_future:
         bc_future_path = config.bc_future_path
         period_f = config.period_f
+        startyear_f = config.startyear_f
+        endyear_f = config.endyear_f
 
     # Validate inputs
     validate_inputs(lat_min, lat_max)
@@ -495,6 +497,8 @@ def main(config):
                     f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
                 )
 
+            del full_bc_corrected, full_param_array_corrected
+
         if config.bc_future:
 
             for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
@@ -516,15 +520,26 @@ def main(config):
                 #         )
                 # Define output file paths
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_{period_f}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+                lat_range = (tile["lat_min"], tile["lat_max"])
+                lon_range = (tile["lon_min"], tile["lon_max"])
 
-                bc_corrected_gcm_future_tile = process_tile_future(
-                    tile,
-                    variables,
-                    level,
-                    config,
-                    sliced_gcm,
-                    sliced_obs,
-                )
+                if os.path.exists(output_file):
+                    print(f"File {output_file} already exists. Skipping...")
+                else:
+                    obs_tile = sliced_obs.sel(
+                        lat=slice(*lat_range), lon=slice(*lon_range)
+                    )
+                    gcm_tile = sliced_gcm.sel(
+                        lat=slice(*lat_range), lon=slice(*lon_range)
+                    )
+                    bc_corrected_gcm_future_tile = process_tile_future(
+                        tile,
+                        variables,
+                        level,
+                        config,
+                        gcm_tile,
+                        obs_tile,
+                    )
 
                 # Save the bias-corrected output
                 if not os.path.exists(output_file):
@@ -532,11 +547,12 @@ def main(config):
                         f"Saving 3D output for tile {idx}, level {level} to {output_file}"
                     )
                     bc_corrected_gcm_future_tile.compute().to_netcdf(output_file)
-                else:
-                    print(f"File {output_file} already exists. Skipping...")
+                    del bc_corrected_gcm_future_tile
+                # else:
+                #     print(f"File {output_file} already exists. Skipping...")
 
                 # Free memory after saving each tile
-                del bc_corrected_gcm_future_tile
+
                 # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
 
                 # except Exception as e:
@@ -626,7 +642,7 @@ def main(config):
         if config.save_bc_output:
             # save the bias corrected data # from input gcm or obs to target gcm
             full_bc_corrected.load().to_netcdf(
-                f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
+                f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_f}_{endyear_f}.nc"
             )
 
         # Remove the temporary directory and its contents
