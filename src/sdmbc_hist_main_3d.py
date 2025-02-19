@@ -630,10 +630,22 @@ def main(config):
                     }
                 )
 
-            if "lev" not in full_bc_corrected.dims:
+            # if "lev" not in full_bc_corrected.dims:
+            #     full_bc_corrected = full_bc_corrected.expand_dims(
+            #         lev=[full_bc_corrected.lev[0].values]
+            #     )
+
+            if (
+                "lev" in full_bc_corrected.coords
+                and "lev" not in full_bc_corrected.dims
+            ):
+                full_bc_corrected = full_bc_corrected.drop_vars(
+                    "lev"
+                )  # Remove as a coordinate
                 full_bc_corrected = full_bc_corrected.expand_dims(
-                    lev=[full_bc_corrected.lev[0].values]
-                )
+                    lev=[sliced_gcm.lev.values]
+                )  # Add as a dimension
+
             full_bc_corrected = full_bc_corrected.transpose("time", "lev", "lat", "lon")
 
             print("save the bc model")

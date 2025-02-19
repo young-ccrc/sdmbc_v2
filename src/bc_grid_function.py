@@ -624,7 +624,7 @@ def dict_to_simplenamespace(d):
 
 
 def load_bc_params_subset(
-    file_path, lat_values, lon_values, lat_min, lat_max, lon_min, lon_max
+    file_path, lat_values, lon_values, level, lat_min, lat_max, lon_min, lon_max
 ):
     """
     Load only the required subset of bc_params from a large npy file, based on latitude and longitude range.
@@ -643,7 +643,10 @@ def load_bc_params_subset(
     """
 
     # Load the full file (necessary since dtype=object)
-    bc_params_array = np.load(file_path, allow_pickle=True)  # Remove mmap_mode
+    bc_params_array = np.load(
+        f"{file_path}/bc_params_3d_historical_lev_{level}_{config.gname}_to_{config.input_model}_{config.startyear_h}_{config.endyear_h}.npy",
+        allow_pickle=True,
+    )  # Remove mmap_mode
 
     # Find indices for the latitude and longitude range
     lat_indices = np.where((lat_values >= lat_min) & (lat_values <= lat_max))[0]
@@ -711,6 +714,7 @@ def process_tile_future(
         config.out_path,
         daily_gcm.lat.values,
         daily_gcm.lon.values,
+        level,
         config.lat_min,
         config.lat_max,
         config.lon_min,
@@ -1456,7 +1460,7 @@ def bc_correction_grid_cell_future_multiprocess(gcm_future, bc_params_array, var
     # Use multiprocessing Pool
     num_workers = cpu_count()  # Get number of CPU cores
     n = num_workers
-    # n = min(len(os.sched_getaffinity(0)), num_workers, 96)
+    n = min(len(os.sched_getaffinity(0)), num_workers, 96)
     print(f"Using {n} CPU cores for parallel processing...")
 
     with Pool(processes=n) as pool:

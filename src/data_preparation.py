@@ -989,7 +989,7 @@ def determine_tiles(file_paths, var, lat_min, lat_max, lon_min, lon_max):
     """
 
     ds_tile = xr.open_dataset(file_paths[var][0])
-    max_tile_size = 1000
+    max_tile_size = 1500
     # Use the first variable's file paths to determine grid size
     ds_tile = ds_tile.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
     lat_size = ds_tile.sizes["lat"]
