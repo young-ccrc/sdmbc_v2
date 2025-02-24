@@ -539,6 +539,8 @@ def main(config):
                         config,
                         gcm_tile,
                         obs_tile,
+                        temp_dir,
+                        idx,
                     )
 
                 # Save the bias-corrected output

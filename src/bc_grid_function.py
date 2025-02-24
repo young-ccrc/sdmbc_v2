@@ -627,16 +627,17 @@ def load_bc_params_subset(
     file_path, lat_values, lon_values, level, lat_min, lat_max, lon_min, lon_max
 ):
     """
-    Load only the required subset of bc_params from a large npy file, based on latitude and longitude range.
+    Load only the required subset of bc_params from a large npy file, mapped to the correct tile's grid cell indices.
 
     Args:
         file_path (str): Path to the `.npy` file.
-        lat_values (np.ndarray): Latitude values corresponding to bc_params indices.
-        lon_values (np.ndarray): Longitude values corresponding to bc_params indices.
-        lat_min (float): Minimum latitude to select.
-        lat_max (float): Maximum latitude to select.
-        lon_min (float): Minimum longitude to select.
-        lon_max (float): Maximum longitude to select.
+        lat_values (np.ndarray): Global latitude grid corresponding to bc_params indices.
+        lon_values (np.ndarray): Global longitude grid corresponding to bc_params indices.
+        level (int): Vertical level being processed.
+        lat_min (float): Minimum latitude for the tile.
+        lat_max (float): Maximum latitude for the tile.
+        lon_min (float): Minimum longitude for the tile.
+        lon_max (float): Maximum longitude for the tile.
 
     Returns:
         np.ndarray: Subset of bc_params with selected lat/lon indices.
@@ -648,19 +649,69 @@ def load_bc_params_subset(
         allow_pickle=True,
     )  # Remove mmap_mode
 
-    # Find indices for the latitude and longitude range
-    lat_indices = np.where((lat_values >= lat_min) & (lat_values <= lat_max))[0]
-    lon_indices = np.where((lon_values >= lon_min) & (lon_values <= lon_max))[0]
+    # Convert lat/lon values to corresponding grid indices
+    lat_min_idx = max(0, np.searchsorted(lat_values, lat_min, side="left"))
+    lat_max_idx = min(
+        len(lat_values), np.searchsorted(lat_values, lat_max, side="right")
+    )
 
-    # Select only the needed subset
-    bc_params_subset = bc_params_array[np.ix_(lat_indices, lon_indices)]
+    lon_min_idx = max(0, np.searchsorted(lon_values, lon_min, side="left"))
+    lon_max_idx = min(
+        len(lon_values), np.searchsorted(lon_values, lon_max, side="right")
+    )
 
-    # Convert dictionaries to SimpleNamespace for easy access
+    # Extract the correct subset based on computed indices
+    bc_params_subset = bc_params_array[lat_min_idx:lat_max_idx, lon_min_idx:lon_max_idx]
+
+    # Convert dictionaries to SimpleNamespace only if not already converted
     for i in range(bc_params_subset.shape[0]):
         for j in range(bc_params_subset.shape[1]):
-            bc_params_subset[i, j] = SimpleNamespace(**bc_params_subset[i, j])
+            if isinstance(
+                bc_params_subset[i, j], dict
+            ):  # Convert only if it's a dictionary
+                bc_params_subset[i, j] = SimpleNamespace(**bc_params_subset[i, j])
 
     return bc_params_subset
+
+
+# def load_bc_params_subset(
+#     file_path, lat_values, lon_values, level, lat_min, lat_max, lon_min, lon_max
+# ):
+#     """
+#     Load only the required subset of bc_params from a large npy file, based on latitude and longitude range.
+
+#     Args:
+#         file_path (str): Path to the `.npy` file.
+#         lat_values (np.ndarray): Latitude values corresponding to bc_params indices.
+#         lon_values (np.ndarray): Longitude values corresponding to bc_params indices.
+#         lat_min (float): Minimum latitude to select.
+#         lat_max (float): Maximum latitude to select.
+#         lon_min (float): Minimum longitude to select.
+#         lon_max (float): Maximum longitude to select.
+
+#     Returns:
+#         np.ndarray: Subset of bc_params with selected lat/lon indices.
+#     """
+
+#     # Load the full file (necessary since dtype=object)
+#     bc_params_array = np.load(
+#         f"{file_path}/bc_params_3d_historical_lev_{level}_{config.gname}_to_{config.input_model}_{config.startyear_h}_{config.endyear_h}.npy",
+#         allow_pickle=True,
+#     )  # Remove mmap_mode
+
+#     # Find indices for the latitude and longitude range
+#     lat_indices = np.where((lat_values >= lat_min) & (lat_values <= lat_max))[0]
+#     lon_indices = np.where((lon_values >= lon_min) & (lon_values <= lon_max))[0]
+
+#     # Select only the needed subset
+#     bc_params_subset = bc_params_array[np.ix_(lat_indices, lon_indices)]
+
+#     # Convert dictionaries to SimpleNamespace for easy access
+#     for i in range(bc_params_subset.shape[0]):
+#         for j in range(bc_params_subset.shape[1]):
+#             bc_params_subset[i, j] = SimpleNamespace(**bc_params_subset[i, j])
+
+#     return bc_params_subset
 
 
 def process_tile_future(
@@ -670,6 +721,8 @@ def process_tile_future(
     config,
     gcm_hist,
     obs_hist,
+    temp_dir,
+    idx,
 ):
     """
     Process a single tile for bias correction for future data.
@@ -710,20 +763,33 @@ def process_tile_future(
         config.endyear_f,
         config.bc_boundary,
     )
-    bc_params_array_loaded = load_bc_params_subset(
-        config.out_path,
-        daily_gcm.lat.values,
-        daily_gcm.lon.values,
-        level,
-        config.lat_min,
-        config.lat_max,
-        config.lon_min,
-        config.lon_max,
-    )
+    # bc_params_array_loaded = load_bc_params_subset(
+    #     config.out_path,
+    #     gcm.lat.values,
+    #     gcm.lon.values,
+    #     level,
+    #     tile["lat_min"],
+    #     tile["lat_max"],
+    #     tile["lon_min"],
+    #     tile["lon_max"],
+    # )
     # bc_params_array_loaded = np.load(
     #     f"{config.out_path}/bc_params_3d_{config.period}_lev_{level}_{config.gname}_to_{config.input_model}_{config.startyear_h}_{config.endyear_h}.npy",
     #     allow_pickle=True,
     # )
+    bc_params_array_loaded = np.load(
+        f"{temp_dir}/bc_params_tile_3d_{config.period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.npy",
+        allow_pickle=True,
+    )
+    # Convert dictionaries to SimpleNamespace only if not already converted
+    for i in range(bc_params_array_loaded.shape[0]):
+        for j in range(bc_params_array_loaded.shape[1]):
+            if isinstance(
+                bc_params_array_loaded[i, j], dict
+            ):  # Convert only if it's a dictionary
+                bc_params_array_loaded[i, j] = SimpleNamespace(
+                    **bc_params_array_loaded[i, j]
+                )
 
     # Perform bias correction across the tile
     # bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_dask(
@@ -736,7 +802,7 @@ def process_tile_future(
         bc_params_array_loaded,
         var_list_w,
     )
-    print(bc_corrected_gcm_future_tile)
+
     if config.sub_daily_correction:
         bc_corrected_gcm_future = future_subdaily_correction(
             gcm_hist,
@@ -753,7 +819,7 @@ def process_tile_future(
             config.startyear_f,
             config.endyear_f,
         )
-
+    # print(bc_corrected_gcm_future)
     bc_corrected_6hourly_data = apply_boundary_correction(
         bc_corrected_gcm_future, sliced_gcm
     )
