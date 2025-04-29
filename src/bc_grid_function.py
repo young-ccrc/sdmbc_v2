@@ -1,8 +1,8 @@
 """
 Bias Correction Grid Function Module for SDMBCv2
 
-This script provides core functionality for performing bias correction on climate model data using the SDMBCv2 framework. 
-It includes various utilities for applying bias correction to historical data, rescaling future climate projections, 
+This script provides core functionality for performing bias correction on climate model data using the SDMBCv2 framework.
+It includes various utilities for applying bias correction to historical data, rescaling future climate projections,
 and handling sub-daily correction with boundary adjustments.
 
 Main features of this script:
@@ -41,7 +41,6 @@ from data_preparation import (
 from sdmbc_bc_function import (
     bc_correction_future,
     bc_correction_hist,
-    empirical_quantile_mapping_future_xarray,
     quantile_mapping_rescale_all,
     quantile_mapping_rescale_future,
     rescale_to_sum_one,
@@ -187,55 +186,55 @@ def rescale_and_reformat(gcmc_corrected, ff_gcm, ff_obs):
     return six_hourly_data_hist
 
 
-def rescale_and_reformat_future(gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future):
-    """
-    Rescale and reformat corrected GCM data for future scenarios using fraction factors.
+# def rescale_and_reformat_future(gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future):
+#     """
+#     Rescale and reformat corrected GCM data for future scenarios using fraction factors.
 
-    Args:
-        gcmc_corrected (xarray.Dataset): Corrected GCM data.
-        ff_gcm (xarray.Dataset): Fraction factors for GCM data.
-        ff_obs (xarray.Dataset): Fraction factors for observational data.
-        ff_gcm_future (xarray.Dataset): Fraction factors for future GCM data.
+#     Args:
+#         gcmc_corrected (xarray.Dataset): Corrected GCM data.
+#         ff_gcm (xarray.Dataset): Fraction factors for GCM data.
+#         ff_obs (xarray.Dataset): Fraction factors for observational data.
+#         ff_gcm_future (xarray.Dataset): Fraction factors for future GCM data.
 
-    Returns:
-        xarray.Dataset: Rescaled future six-hourly bias-corrected GCM data.
-    """
-    # Rescale and Reformat using Fraction Factors and Sliced GCM Data
-    if config.sub_daily_correction:
-        gcm_corrected = empirical_quantile_mapping_future_xarray(
-            ff_obs,
-            ff_gcm,
-            ff_gcm_future,
-            var_list_w,
-            n_quantiles=100,
-            extrapolation="constant",
-        )
+#     Returns:
+#         xarray.Dataset: Rescaled future six-hourly bias-corrected GCM data.
+#     """
+#     # Rescale and Reformat using Fraction Factors and Sliced GCM Data
+#     if config.sub_daily_correction:
+#         gcm_corrected = empirical_quantile_mapping_future_xarray(
+#             ff_obs,
+#             ff_gcm,
+#             ff_gcm_future,
+#             var_list_w,
+#             n_quantiles=100,
+#             extrapolation="constant",
+#         )
 
-        fraction_factors_gcm_corrected_future = xr.Dataset()
+#         fraction_factors_gcm_corrected_future = xr.Dataset()
 
-        for var in var_list:
-            sim_data = gcm_corrected[var].values
-            corrected_gcm_data_rescaled = rescale_to_sum_one(sim_data)
-            # Create a new DataArray and append to the corrected Dataset
-            fraction_factors_gcm_corrected_future[var] = xr.DataArray(
-                corrected_gcm_data_rescaled,
-                dims=gcm_corrected[var].dims,
-                coords=gcm_corrected[var].coords,
-            )
+#         for var in var_list:
+#             sim_data = gcm_corrected[var].values
+#             corrected_gcm_data_rescaled = rescale_to_sum_one(sim_data)
+#             # Create a new DataArray and append to the corrected Dataset
+#             fraction_factors_gcm_corrected_future[var] = xr.DataArray(
+#                 corrected_gcm_data_rescaled,
+#                 dims=gcm_corrected[var].dims,
+#                 coords=gcm_corrected[var].coords,
+#             )
 
-        six_hourly_data_hist = daily_to_6hourly_xr(
-            gcmc_corrected,
-            gcm_corrected,
-            var_list_w,
-            config.startyear_h,
-            config.endyear_h,
-        )
-    else:
-        six_hourly_data_hist = daily_to_6hourly_xr(
-            gcmc_corrected, ff_gcm, var_list_w, config.startyear_h, config.endyear_h
-        )
+#         six_hourly_data_hist = daily_to_6hourly_xr(
+#             gcmc_corrected,
+#             gcm_corrected,
+#             var_list_w,
+#             config.startyear_h,
+#             config.endyear_h,
+#         )
+#     else:
+#         six_hourly_data_hist = daily_to_6hourly_xr(
+#             gcmc_corrected, ff_gcm, var_list_w, config.startyear_h, config.endyear_h
+#         )
 
-    return six_hourly_data_hist
+#     return six_hourly_data_hist
 
 
 # Delay the boundary condition correction if needed
@@ -777,19 +776,22 @@ def process_tile_future(
     #     f"{config.out_path}/bc_params_3d_{config.period}_lev_{level}_{config.gname}_to_{config.input_model}_{config.startyear_h}_{config.endyear_h}.npy",
     #     allow_pickle=True,
     # )
-    bc_params_array_loaded = np.load(
-        f"{temp_dir}/bc_params_tile_3d_{config.period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.npy",
-        allow_pickle=True,
-    )
-    # Convert dictionaries to SimpleNamespace only if not already converted
-    for i in range(bc_params_array_loaded.shape[0]):
-        for j in range(bc_params_array_loaded.shape[1]):
-            if isinstance(
-                bc_params_array_loaded[i, j], dict
-            ):  # Convert only if it's a dictionary
-                bc_params_array_loaded[i, j] = SimpleNamespace(
-                    **bc_params_array_loaded[i, j]
-                )
+    # bc_params_array_loaded = np.load(
+    #     f"{temp_dir}/bc_params_tile_3d_{config.period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.npy",
+    #     allow_pickle=True,
+    # )
+    output_params = f"{temp_dir}/bc_params_tile_3d_{config.period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+    bc_params_array_loaded = xr.load_dataset(output_params)
+
+    # # Convert dictionaries to SimpleNamespace only if not already converted
+    # for i in range(bc_params_array_loaded.shape[0]):
+    #     for j in range(bc_params_array_loaded.shape[1]):
+    #         if isinstance(
+    #             bc_params_array_loaded[i, j], dict
+    #         ):  # Convert only if it's a dictionary
+    #             bc_params_array_loaded[i, j] = SimpleNamespace(
+    #                 **bc_params_array_loaded[i, j]
+    #             )
 
     # Perform bias correction across the tile
     # bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_dask(
@@ -939,7 +941,7 @@ def preprocess_and_save_gcm(
 
     temp_file = os.path.join(
         temp_dir,
-        f"preprocessed_{config.gname}_lev_{level}_{config.lat_min}_{config.lat_max}_{config.lon_min}_{config.lon_max}.nc",
+        f"preprocessed_{config.gname}_lev_{level}_{tile[0]['lat_min']}_{tile[0]['lat_max']}_{tile[0]['lon_min']}_{tile[0]['lon_max']}.nc",
     )
     if not os.path.exists(temp_file):
         sliced_gcm = xr.Dataset()
@@ -1025,7 +1027,7 @@ def preprocess_and_save_obs(
     # Save the preprocessed data to a temporary file
     temp_file = os.path.join(
         temp_dir,
-        f"preprocessed_obs_{var_name}_lev_{level_index}_{tile[0]['lat_min']}_{tile[0]['lat_max']}_{tile[0]['lon_min']}_{tile[0]['lon_max']}.nc",
+        f"preprocessed_obs_{var_name}_lev_{level_index}_{tile[0]['lat_min']}_{tile[0]['lat_max']}_{tile[0]['lon_min']}_{tile[0]['lon_max']}_{startyear_h}_{endyear_h}.nc",
     )
 
     if not os.path.exists(temp_file):
@@ -1489,17 +1491,35 @@ def correction_wrapper_future_pool(args):
     # Extract GCM data for this (lat, lon)
     gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
 
-    # Find nearest indices
-    lat_array = reshaped_gcm.lat.values
-    lon_array = reshaped_gcm.lon.values
+    # # Find nearest indices
+    # lat_array = reshaped_gcm.lat.values
+    # lon_array = reshaped_gcm.lon.values
 
-    lat_idx = (np.abs(lat_array - lat)).argmin()
-    lon_idx = (np.abs(lon_array - lon)).argmin()
+    # lat_idx = (np.abs(lat_array - lat)).argmin()
+    # lon_idx = (np.abs(lon_array - lon)).argmin()
 
     # Select bias correction parameters
-    params_data = bc_params_array[lat_idx, lon_idx]
+    # params_data = bc_params_array[lat_idx, lon_idx]
+    # ds_cell = bc_params_array.sel(lat=lat, lon=lon, method="nearest")
+    ds_cell = bc_params_array.sel(lat=lat, lon=lon)
 
-    # Convert GCM data to NumPy (Fortran needs NumPy)
+    # For each variable, reshape the flattened data back to its original shape.
+    params = {}
+    for var in ds_cell.data_vars:
+        # The flattened data is stored in a variable with a unique flattened dimension.
+        flat_data = ds_cell[var].values
+        # Retrieve the original shape from the variable's attributes.
+        original_shape = ds_cell[var].attrs.get("original_shape", None)
+        if original_shape is None:
+            raise ValueError(f"Original shape not found for variable '{var}'.")
+        # Reshape the 1D (flattened) data back to its original shape.
+        reshaped_data = flat_data.reshape(original_shape)
+        params[var] = reshaped_data
+
+    # Convert the dictionary to a SimpleNamespace so that we can access attributes like params_data.avdc_iter
+    params_data = SimpleNamespace(**params)
+
+    # Convert GCM dat a to NumPy (Fortran needs NumPy)
     gcm_data_np = np.stack(gcm_data, axis=0).astype(np.float32)
 
     # Apply bias correction using Fortran function
@@ -1566,98 +1586,98 @@ def bc_correction_grid_cell_future_multiprocess(gcm_future, bc_params_array, var
         return gcmc_corrected
 
 
-def bc_correction_grid_cell_future_daily_dask(
-    ff_gcm,
-    ff_obs,
-    gcm_future,
-    ff_gcm_future,
-    bc_params_array,
-    startyear_f,
-    endyear_f,
-    var_list_w,
-    sliced_gcm_future,
-):
-    """
-    Perform daily bias correction for future GCM data across all grid cells in parallel using Dask.
+# def bc_correction_grid_cell_future_daily_dask(
+#     ff_gcm,
+#     ff_obs,
+#     gcm_future,
+#     ff_gcm_future,
+#     bc_params_array,
+#     startyear_f,
+#     endyear_f,
+#     var_list_w,
+#     sliced_gcm_future,
+# ):
+#     """
+#     Perform daily bias correction for future GCM data across all grid cells in parallel using Dask.
 
-    Args:
-        ff_gcm, ff_obs: Fraction factors for GCM and observational data.
-        gcm_future (xarray.Dataset): GCM data for future period.
-        ff_gcm_future: Fraction factors for future GCM data.
-        bc_params_array: Bias correction parameters.
-        startyear_f (int): Start year of the future period.
-        endyear_f (int): End year of the future period.
-        var_list_w (list of str): List of variable names to be corrected.
-        sliced_gcm_future (xarray.Dataset): Sliced GCM data.
+#     Args:
+#         ff_gcm, ff_obs: Fraction factors for GCM and observational data.
+#         gcm_future (xarray.Dataset): GCM data for future period.
+#         ff_gcm_future: Fraction factors for future GCM data.
+#         bc_params_array: Bias correction parameters.
+#         startyear_f (int): Start year of the future period.
+#         endyear_f (int): End year of the future period.
+#         var_list_w (list of str): List of variable names to be corrected.
+#         sliced_gcm_future (xarray.Dataset): Sliced GCM data.
 
-    Returns:
-        xarray.Dataset: Bias-corrected daily GCM data for the future.
-    """
+#     Returns:
+#         xarray.Dataset: Bias-corrected daily GCM data for the future.
+#     """
 
-    # grid_cells = list(itertools.product(gcm_future.lat.values, gcm_future.lon.values))
-    # batch_size = 20  # Process 20 grid cells at a time
-    # tasks = [
-    #     dask.delayed(process_batch_of_grid_cells_future)(
-    #         grid_cells[i : i + batch_size], gcm_future, bc_params_array
-    #     )
-    #     for i in range(0, len(grid_cells), batch_size)
-    # ]
-    # # Generate tasks for each grid cell
-    tasks = [
-        process_grid_cell_future(lat, lon, gcm_future, bc_params_array)
-        for lat, lon in itertools.product(gcm_future.lat.values, gcm_future.lon.values)
-    ]
+#     # grid_cells = list(itertools.product(gcm_future.lat.values, gcm_future.lon.values))
+#     # batch_size = 20  # Process 20 grid cells at a time
+#     # tasks = [
+#     #     dask.delayed(process_batch_of_grid_cells_future)(
+#     #         grid_cells[i : i + batch_size], gcm_future, bc_params_array
+#     #     )
+#     #     for i in range(0, len(grid_cells), batch_size)
+#     # ]
+#     # # Generate tasks for each grid cell
+#     tasks = [
+#         process_grid_cell_future(lat, lon, gcm_future, bc_params_array)
+#         for lat, lon in itertools.product(gcm_future.lat.values, gcm_future.lon.values)
+#     ]
 
-    # Compute all tasks in parallel at the end
-    results = dask.compute(*tasks)
+#     # Compute all tasks in parallel at the end
+#     results = dask.compute(*tasks)
 
-    # Flatten the list of results
-    flattened_results = [item for sublist in results for item in sublist]
+#     # Flatten the list of results
+#     flattened_results = [item for sublist in results for item in sublist]
 
-    # Initialize arrays to hold the final data
-    corrected_data = {
-        var: np.empty((31, 12, 31, len(gcm_future.lat), len(gcm_future.lon)))
-        for var in var_list_w
-    }
+#     # Initialize arrays to hold the final data
+#     corrected_data = {
+#         var: np.empty((31, 12, 31, len(gcm_future.lat), len(gcm_future.lon)))
+#         for var in var_list_w
+#     }
 
-    # Fill the arrays with data from results
-    for result in results:
-        lat_idx = np.where(gcm_future.lat.values == result["lat"])[0][0]
-        lon_idx = np.where(gcm_future.lon.values == result["lon"])[0][0]
-        for i, var in enumerate(var_list_w):
-            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+#     # Fill the arrays with data from results
+#     for result in results:
+#         lat_idx = np.where(gcm_future.lat.values == result["lat"])[0][0]
+#         lon_idx = np.where(gcm_future.lon.values == result["lon"])[0][0]
+#         for i, var in enumerate(var_list_w):
+#             corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
 
-    # Convert to Xarray Dataset
-    gcmc_corrected = xr.Dataset(
-        {
-            var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
-            for var in var_list_w
-        },
-        coords={
-            "year": gcm_future.year,
-            "month": gcm_future.month,
-            "day": gcm_future.day,
-            "lat": gcm_future.lat,
-            "lon": gcm_future.lon,
-        },
-    )
+#     # Convert to Xarray Dataset
+#     gcmc_corrected = xr.Dataset(
+#         {
+#             var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
+#             for var in var_list_w
+#         },
+#         coords={
+#             "year": gcm_future.year,
+#             "month": gcm_future.month,
+#             "day": gcm_future.day,
+#             "lat": gcm_future.lat,
+#             "lon": gcm_future.lon,
+#         },
+#     )
 
-    six_hourly_data = rescale_and_reformat_future(
-        gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future
-    )
+#     six_hourly_data = rescale_and_reformat_future(
+#         gcmc_corrected, ff_gcm, ff_obs, ff_gcm_future
+#     )
 
-    # g_u = sliced_gcm_future.ua.sel(time=slice(str(startyear_f), str(endyear_f)))
-    # g_v = sliced_gcm_future.va.sel(time=slice(str(startyear_f), str(endyear_f)))
-    # six_hourly_data = six_hourly_data.sel(time=slice(str(startyear_f), str(endyear_f)))
+#     # g_u = sliced_gcm_future.ua.sel(time=slice(str(startyear_f), str(endyear_f)))
+#     # g_v = sliced_gcm_future.va.sel(time=slice(str(startyear_f), str(endyear_f)))
+#     # six_hourly_data = six_hourly_data.sel(time=slice(str(startyear_f), str(endyear_f)))
 
-    bc_corrected_6hourly_data = apply_boundary_correction(
-        six_hourly_data, sliced_gcm_future
-    )
+#     bc_corrected_6hourly_data = apply_boundary_correction(
+#         six_hourly_data, sliced_gcm_future
+#     )
 
-    # Compute all delayed tasks in parallel
-    final_corrected_data = dask.compute(bc_corrected_6hourly_data)
+#     # Compute all delayed tasks in parallel
+#     final_corrected_data = dask.compute(bc_corrected_6hourly_data)
 
-    return final_corrected_data[0]
+#     return final_corrected_data[0]
 
 
 def bc_correction_grid_cell_future_dask_2d(
@@ -2031,3 +2051,71 @@ def apply_moving_window_bias_correction(
 #         print(f"{target_year} completed")
 
 #     return corrected_dataset
+
+
+def convert_bc_params_to_xarray(bc_params_array, lat_values, lon_values):
+    nlat, nlon = bc_params_array.shape
+
+    # --- Extract Variable Keys and Pre-allocate Arrays ---
+    # Find the variable keys from the first non-None dictionary in bc_params_array.
+    var_keys = None
+    for i in range(nlat):
+        for j in range(nlon):
+            if bc_params_array[i, j] is not None:
+                var_keys = list(bc_params_array[i, j].keys())
+                break
+        if var_keys is not None:
+            break
+
+    if var_keys is None:
+        raise ValueError("No valid dictionary found in bc_params_array.")
+
+    # For each key, determine the flattened size from the first sample,
+    # converting scalars to numpy arrays so that they have a shape.
+    data_vars = {}
+    original_shapes = {}  # to store each variable's original shape for later reshaping
+    for key in var_keys:
+        sample_val = bc_params_array[i, j][key]
+        # Convert scalars (or objects without shape) to numpy arrays.
+        if np.isscalar(sample_val) or not hasattr(sample_val, "shape"):
+            sample_array = np.array([sample_val])
+        else:
+            sample_array = sample_val
+        original_shapes[key] = sample_array.shape
+        flat_len = sample_array.size
+        data_vars[key] = np.empty((flat_len, nlat, nlon), dtype=sample_array.dtype)
+        # print(f"{key}: original shape = {sample_array.shape}, flat length = {flat_len}")
+
+    # --- Fill the Data Arrays ---
+    # Loop through each grid cell, flatten the array from each dictionary, and store it.
+    for i in range(nlat):
+        for j in range(nlon):
+            cell_dict = bc_params_array[i, j]
+            if cell_dict is not None:
+                for key in var_keys:
+                    val = cell_dict[key]
+                    if np.isscalar(val) or not hasattr(val, "shape"):
+                        arr = np.array([val])
+                    else:
+                        arr = val
+                    data_vars[key][:, i, j] = arr.flatten()
+            else:
+                # If a cell is missing data, fill with NaN.
+                for key in var_keys:
+                    data_vars[key][:, i, j] = np.nan
+
+    # --- Create xarray Dataset ---
+    # Build an xarray Dataset with coordinates for lat and lon.
+    ds = xr.Dataset(
+        coords={"lat": (("lat",), lat_values), "lon": (("lon",), lon_values)}
+    )
+
+    # Add each variable to the Dataset with a unique flattened dimension for each variable.
+    for key, arr in data_vars.items():
+        flat_dim_name = f"{key}_flat"
+        ds[key] = ((flat_dim_name, "lat", "lon"), arr)
+        ds[key].attrs["original_shape"] = original_shapes[key]
+
+    # (Optional) Save the Dataset to a NetCDF file instead of npy for more efficient I/O.
+    # ds.to_netcdf("bc_params.nc")
+    return ds

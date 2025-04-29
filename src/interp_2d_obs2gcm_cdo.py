@@ -191,7 +191,7 @@ def main(config):
     # GCM
     # Load the target dataset
     target_files = sorted(
-        glob.glob(f"{target_path}/Oday/{target_2d}/{sinfor}/{version}/{target_2d}_*")
+        glob.glob(f"{target_path}/Oday/{target_2d}/{sinfor}/v*/{target_2d}_*")
     )
 
     filtered_files = [
@@ -200,9 +200,7 @@ def main(config):
         if is_within_period(*extract_years(f), start_year, end_year)
     ]
     # print(filtered_files)
-    target_latlon_grid = glob.glob(
-        f"{target_path}/fx/orog/{sinfor}/{version}/orog_*.nc"
-    )
+    target_latlon_grid = glob.glob(f"{target_path}/fx/orog/{sinfor}/v*/orog_*.nc")
 
     for file in filtered_files:
         output_file = os.path.join(

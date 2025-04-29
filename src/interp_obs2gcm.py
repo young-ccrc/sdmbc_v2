@@ -11,7 +11,7 @@ The script is designed to be run on the NCI's Gadi supercomputer, but can be mod
 
 Note: This script assumes that the necessary input files and directories are available and properly formatted.
 
-Author: Youngil (Young) Kim, CLEX, CCRC, UNSW
+Author: Youngil (Young) Kim, CCRC, UNSW
 Contact: youngil.kim@unsw.edu.au
 """
 
@@ -19,11 +19,13 @@ import argparse
 import glob
 import os
 import warnings
+
 # from multiprocessing import Pool
 from pathlib import Path
 
 import dask.array as da  # type: ignore
 import numpy as np  # type: ignore
+
 # import dask.array as da  # type: ignore
 import xarray as xr  # type: ignore
 import xesmf as xe  # type: ignore
@@ -106,10 +108,28 @@ def parse_arguments():
 
 
 # Start of the script -----------------------------------------------------
-import matplotlib.pyplot as plt
-
-
 def standardize_dims(ds):
+    """
+    Standardize the dimension names of an xarray Dataset.
+
+    This function attempts to rename the dimensions of the given xarray Dataset
+    to a set of standard names: "time", "lat", "lon", and "lev". It uses the
+    following heuristics to guess the appropriate standard name for each dimension:
+
+    - "time": if the dimension's data type is datetime64[ns]
+    - "lat": if the dimension name contains "lat" (case insensitive) or if the
+      dimension's values are within the range [-90, 90]
+    - "lon": if the dimension name contains "lon" (case insensitive) or if the
+      dimension's values are within the range [-180, 180]
+    - "lev": if the dimension name contains "lev", "level", "height", or "depth"
+      (case insensitive)
+
+    Parameters:
+    ds (xarray.Dataset): The input xarray Dataset whose dimensions need to be standardized.
+
+    Returns:
+    xarray.Dataset: A new xarray Dataset with standardized dimension names.
+    """
     standard_names = ["time", "lat", "lon", "lev"]
     used_names = set(ds.dims) & set(
         standard_names
@@ -207,95 +227,207 @@ def calculate_pressure_levels(ap, b, ps):
     return p_levels
 
 
-def compute_geopotential_height(p_levels, T_levels, q_levels=None):
-    Rd = 287.05  # J/kg/K, specific gas constant for dry air
-    g = 9.80665  # m/s^2, acceleration due to gravity
+# def compute_geopotential_height(p_levels, T_levels, q_levels=None):
+#     Rd = 287.05  # J/kg/K, specific gas constant for dry air
+#     g = 9.80665  # m/s^2, acceleration due to gravity
 
-    # Ensure T_levels and q_levels are DataArrays for compatibility with xarray operations
+#     # Ensure T_levels and q_levels are DataArrays for compatibility with xarray operations
+#     T_levels = (
+#         T_levels if isinstance(T_levels, xr.DataArray) else xr.DataArray(T_levels)
+#     )
+#     if q_levels is not None:
+#         q_levels = (
+#             q_levels if isinstance(q_levels, xr.DataArray) else xr.DataArray(q_levels)
+#         )
+
+#     # Compute the pressure ratio without aligning by levels
+#     upper_p = p_levels.isel(
+#         lev=slice(None, -1)
+#     ).data  # Pressure at the lower boundary of each layer
+#     lower_p = p_levels.isel(
+#         lev=slice(1, None)
+#     ).data  # Pressure at the upper boundary of each layer
+#     p_ratio = upper_p / lower_p
+#     log_p_ratio = da.log(p_ratio)
+
+#     # Re-create the DataArray for log_p_ratio with adjusted coordinates
+#     log_p_ratio_da = xr.DataArray(
+#         log_p_ratio,
+#         dims=["time", "lev", "lat", "lon"],
+#         coords={
+#             "time": p_levels.time,
+#             "lev": p_levels.lev[:-1],  # Use coordinates from the upper slice
+#             "lat": p_levels.lat,
+#             "lon": p_levels.lon,
+#         },
+#     )
+
+#     # Compute mean temperature between consecutive levels without alignment
+#     upper_T = T_levels.isel(lev=slice(None, -1)).data
+#     lower_T = T_levels.isel(lev=slice(1, None)).data
+#     mean_T = (upper_T + lower_T) / 2
+
+#     # Re-create the DataArray for mean_T with adjusted coordinates
+#     mean_T_da = xr.DataArray(
+#         mean_T,
+#         dims=["time", "lev", "lat", "lon"],
+#         coords=log_p_ratio_da.coords,  # Match coordinates with log_p_ratio_da
+#     )
+
+#     if q_levels is not None:
+#         # Compute moist temperature
+#         upper_q = q_levels.isel(lev=slice(None, -1)).data
+#         lower_q = q_levels.isel(lev=slice(1, None)).data
+#         mean_q = (upper_q + lower_q) / 2
+
+#         # Re-create the DataArray for mean_q with adjusted coordinates
+#         mean_q_da = xr.DataArray(
+#             mean_q,
+#             dims=["time", "lev", "lat", "lon"],
+#             coords=log_p_ratio_da.coords,  # Match coordinates with log_p_ratio_da
+#         )
+#         mean_T_da = mean_T_da * (1.0 + 0.609133 * mean_q_da)
+
+#     # Calculate thickness of each layer (delta Z)
+#     delta_Z = (Rd / g) * mean_T_da * log_p_ratio_da
+
+#     # Integrate delta_Z from the top to obtain geopotential heights
+#     Z_levels_cumsum = delta_Z.cumsum(dim="lev")
+
+#     # Add an extra level at the top with extrapolated geopotential height
+#     gradient_top = Z_levels_cumsum.isel(lev=-1) - Z_levels_cumsum.isel(lev=-2)
+#     top_extrapolated = Z_levels_cumsum.isel(lev=-1) + gradient_top
+#     Z_levels = xr.concat(
+#         [Z_levels_cumsum, top_extrapolated.expand_dims(lev=[p_levels.lev[-1]])],
+#         dim="lev",
+#     )
+
+#     # Update level coordinates to include the top level
+#     Z_levels = xr.DataArray(
+#         Z_levels,
+#         dims=["time", "lev", "lat", "lon"],
+#         coords={
+#             "time": p_levels.time,
+#             "lev": p_levels.lev,  # Use original levels, assuming the extra level is added at the top
+#             "lat": p_levels.lat,
+#             "lon": p_levels.lon,
+#         },
+#         name="zfull",
+#     )
+
+#     return Z_levels
+
+
+def compute_geopotential_height(p_levels, T_levels, orog, q_levels=None):
+    """
+    Compute the geopotential height at various pressure levels.
+
+    Parameters:
+    -----------
+    p_levels : xarray.DataArray
+        Pressure levels (Pa) with dimensions (time, lev, lat, lon).
+    T_levels : xarray.DataArray or array-like
+        Temperature levels (K) with dimensions (time, lev, lat, lon).
+    orog : xarray.DataArray or array-like
+        Surface orography (m) with dimensions (time, lat, lon).
+    q_levels : xarray.DataArray or array-like, optional
+        Specific humidity levels (kg/kg) with dimensions (time, lev, lat, lon).
+
+    Returns:
+    --------
+    xarray.DataArray
+        Geopotential height (m) with dimensions (time, lev, lat, lon).
+    """
+    Rd = 287.05  # J/kg/K, specific gas constant for dry air
+    g0 = 9.80665  # m/s^2, acceleration due to gravity
+
+    # Ensure input variables are xarray DataArrays
     T_levels = (
         T_levels if isinstance(T_levels, xr.DataArray) else xr.DataArray(T_levels)
     )
+
     if q_levels is not None:
         q_levels = (
             q_levels if isinstance(q_levels, xr.DataArray) else xr.DataArray(q_levels)
         )
 
-    # Compute the pressure ratio without aligning by levels
-    upper_p = p_levels.isel(
-        lev=slice(None, -1)
-    ).data  # Pressure at the lower boundary of each layer
-    lower_p = p_levels.isel(
-        lev=slice(1, None)
-    ).data  # Pressure at the upper boundary of each layer
+    # Pressure levels
+    upper_p = p_levels.isel(lev=slice(None, -1)).data
+    lower_p = p_levels.isel(lev=slice(1, None)).data
     p_ratio = upper_p / lower_p
     log_p_ratio = da.log(p_ratio)
 
-    # Re-create the DataArray for log_p_ratio with adjusted coordinates
     log_p_ratio_da = xr.DataArray(
         log_p_ratio,
         dims=["time", "lev", "lat", "lon"],
         coords={
             "time": p_levels.time,
-            "lev": p_levels.lev[:-1],  # Use coordinates from the upper slice
+            "lev": p_levels.lev[:-1],
             "lat": p_levels.lat,
             "lon": p_levels.lon,
         },
     )
 
-    # Compute mean temperature between consecutive levels without alignment
+    # Compute mean temperature
     upper_T = T_levels.isel(lev=slice(None, -1)).data
     lower_T = T_levels.isel(lev=slice(1, None)).data
     mean_T = (upper_T + lower_T) / 2
 
-    # Re-create the DataArray for mean_T with adjusted coordinates
     mean_T_da = xr.DataArray(
         mean_T,
         dims=["time", "lev", "lat", "lon"],
-        coords=log_p_ratio_da.coords,  # Match coordinates with log_p_ratio_da
+        coords=log_p_ratio_da.coords,
     )
 
     if q_levels is not None:
-        # Compute moist temperature
         upper_q = q_levels.isel(lev=slice(None, -1)).data
         lower_q = q_levels.isel(lev=slice(1, None)).data
         mean_q = (upper_q + lower_q) / 2
 
-        # Re-create the DataArray for mean_q with adjusted coordinates
         mean_q_da = xr.DataArray(
             mean_q,
             dims=["time", "lev", "lat", "lon"],
-            coords=log_p_ratio_da.coords,  # Match coordinates with log_p_ratio_da
+            coords=log_p_ratio_da.coords,
         )
         mean_T_da = mean_T_da * (1.0 + 0.609133 * mean_q_da)
 
-    # Calculate thickness of each layer (delta Z)
-    delta_Z = (Rd / g) * mean_T_da * log_p_ratio_da
+    # Compute layer thickness
+    delta_Z = (Rd / g0) * mean_T_da * log_p_ratio_da
+    delta_Phi = g0 * delta_Z  # Convert height differences to geopotential differences
 
-    # Integrate delta_Z from the top to obtain geopotential heights
-    Z_levels_cumsum = delta_Z.cumsum(dim="lev")
+    # Convert surface altitude to surface geopotential (Z_g = orog + delta_Z.cumsum(dim="lev") can be used as the orog already in meters)
+    Phi_s = g0 * orog  # Convert orog (meters) to geopotential (m²/s²)
 
-    # Add an extra level at the top with extrapolated geopotential height
-    gradient_top = Z_levels_cumsum.isel(lev=-1) - Z_levels_cumsum.isel(lev=-2)
-    top_extrapolated = Z_levels_cumsum.isel(lev=-1) + gradient_top
-    Z_levels = xr.concat(
-        [Z_levels_cumsum, top_extrapolated.expand_dims(lev=[p_levels.lev[-1]])],
-        dim="lev",
-    )
+    # Integrate from surface geopotential height
+    Phi_levels = Phi_s + delta_Phi.cumsum(dim="lev")
 
-    # Update level coordinates to include the top level
-    Z_levels = xr.DataArray(
-        Z_levels,
+    Z_g_mid = Phi_levels / g0  # Mid-layer geopotential height
+
+    # Surface level height
+    Z_s = orog  # Surface geopotential height in meters
+
+    # Expand Z_s to match dimensions and concatenate it as the first level
+    Z_s_expanded = Z_s.expand_dims(
+        dim={"lev": [p_levels.lev[0]]}, axis=1
+    )  # Shape: (time, 1, lat, lon)
+
+    # Concatenate
+    Z_g = xr.concat([Z_s_expanded, Z_g_mid], dim="lev")
+    Z_g = Z_g.transpose("time", "lev", "lat", "lon")
+
+    # Ensure the 'lev' coordinate matches p_levels
+    Z_g = xr.DataArray(
+        Z_g,
         dims=["time", "lev", "lat", "lon"],
         coords={
             "time": p_levels.time,
-            "lev": p_levels.lev,  # Use original levels, assuming the extra level is added at the top
+            "lev": p_levels.lev,  # Assign the full coordinate
             "lat": p_levels.lat,
             "lon": p_levels.lon,
         },
         name="zfull",
     )
-
-    return Z_levels
+    return Z_g
 
 
 def clean_data(data):
@@ -369,7 +501,9 @@ def custom_interp(x_new, interp_func, x_min, x_max):
 #     return custom_interp(target_levels, f_interp, x_min, x_max)
 
 
-def interpolate_profile(source_profile, source_levels, target_levels):
+def interpolate_profile(
+    source_profile, source_levels, target_levels, gcm_profile, gcm_levels
+):
     """
     Interpolates a source profile to match target levels with custom handling for extrapolation.
 
@@ -400,14 +534,24 @@ def interpolate_profile(source_profile, source_levels, target_levels):
         source_levels, source_profile, bounds_error=False, fill_value="extrapolate"
     )
 
-    # Get the min and max of source levels
-    x_min = np.min(source_levels)
-    x_max = np.max(source_levels)
+    # Interpolate values at target levels
+    interpolated_profile = f_interp(target_levels)
 
-    return custom_interp(target_levels, f_interp, x_min, x_max)
+    # Identify the highest ERA5 level
+    max_era5_level = np.max(source_levels)
+
+    # Replace values above ERA5 max level with GCM values
+    above_era5_mask = target_levels > max_era5_level
+    interpolated_profile[above_era5_mask] = np.interp(
+        target_levels[above_era5_mask], gcm_levels, gcm_profile
+    )
+
+    return interpolated_profile
 
 
-def vertical_interpolation(source_da, source_levels_da, target_levels):
+def vertical_interpolation(
+    source_da, source_levels_da, target_levels, gcm_profile, gcm_levels
+):
     """
     Perform vertical interpolation of a source data array to target levels using xarray's apply_ufunc.
 
@@ -419,25 +563,55 @@ def vertical_interpolation(source_da, source_levels_da, target_levels):
     Returns:
         xarray.DataArray: The interpolated data array.
     """
-    source_levels = source_levels_da  # Ensure we are using the correct levels
-
     # Wrapper to apply interpolation using xarray's apply_ufunc to handle Dask arrays efficiently
+    # interpolated_da = xr.apply_ufunc(
+    #     interpolate_profile,
+    #     source_da,
+    #     source_levels,
+    #     target_levels,
+    #     gcm_profile,
+    #     gcm_levels,
+    #     vectorize=True,  # Enable vectorized execution
+    #     input_core_dims=[["level"], ["level"], ["lev"]],  # Define core dimensions
+    #     output_core_dims=[["lev"]],  # Define output dimensions
+    #     dask="parallelized",  # Enable Dask parallelization
+    #     output_dtypes=[source_da.dtype],
+    # )
     interpolated_da = xr.apply_ufunc(
         interpolate_profile,
-        source_da,
-        source_levels,
-        target_levels,
-        vectorize=True,  # Enable vectorized execution
-        input_core_dims=[["level"], ["level"], ["lev"]],  # Define core dimensions
-        output_core_dims=[["lev"]],  # Define output dimensions
-        dask="parallelized",  # Enable Dask parallelization
+        source_da,  # ERA5 temperature
+        source_levels_da,  # ERA5 geopotential height
+        target_levels,  # Target CNRM geopotential height
+        gcm_profile,  # GCM temperature
+        gcm_levels,  # GCM geopotential height
+        vectorize=True,
+        input_core_dims=[
+            ["level"],
+            ["level"],
+            ["lev"],
+            ["lev"],
+            ["lev"],
+        ],  # Add GCM dims
+        output_core_dims=[["lev"]],
+        dask="parallelized",
         output_dtypes=[source_da.dtype],
     )
-
     return interpolated_da.assign_coords(lev=target_levels.lev)
 
 
 def standardize_coords_from(ds):
+    """
+    Standardizes the coordinate names in the given dataset.
+
+    This function renames the coordinates in the dataset to a standard naming convention.
+    Specifically, it renames 'longitude' to 'lon' and 'latitude' to 'lat' if they exist in the dataset.
+
+    Parameters:
+    ds (xarray.Dataset): The input dataset with coordinates to be standardized.
+
+    Returns:
+    xarray.Dataset: A new dataset with standardized coordinate names.
+    """
     coord_map = {"longitude": "lon", "latitude": "lat"}
     new_ds = ds.copy()
     for old_name, new_name in coord_map.items():
@@ -473,8 +647,42 @@ def ensure_bounds(ds):
     return ds
 
 
+def reduce_bounds(ds):
+    """Ensure lat_bnds and lon_bnds are 2D (lat, bnds) and (lon, bnds)."""
+    if "lat_bnds" in ds.variables and "time" in ds["lat_bnds"].dims:
+        ds["lat_bnds"] = ds["lat_bnds"].isel(time=0)  # drop time dimension
+    if "lon_bnds" in ds.variables and "time" in ds["lon_bnds"].dims:
+        ds["lon_bnds"] = ds["lon_bnds"].isel(time=0)
+    return ds
+
+
 def regrid(source_ds, target_ds, method, weights_path, rename_dict):
-    """Perform interpolation/regridding of a source dataset to a target dataset using the specified method."""
+    """
+    Perform interpolation/regridding of a source dataset to a target dataset using the specified method.
+
+    Parameters:
+    -----------
+    source_ds : xr.Dataset or xr.DataArray
+        The source dataset or data array to be regridded.
+    target_ds : xr.Dataset or xr.DataArray
+        The target dataset or data array to which the source dataset will be regridded.
+    method : str
+        The regridding method to be used (e.g., 'bilinear', 'nearest_s2d', 'patch', etc.).
+    weights_path : str
+        The file path where the regridding weights will be saved or loaded from.
+    rename_dict : dict
+        A dictionary mapping original variable names in the source dataset to new names in the regridded dataset.
+
+    Returns:
+    --------
+    xr.Dataset or xr.DataArray
+        The regridded dataset or data array with variables renamed according to rename_dict.
+
+    Raises:
+    -------
+    TypeError
+        If the input source_ds is not an xarray DataArray or Dataset.
+    """
     # source_ds = standardize_coords(source_ds)
     # target_ds = standardize_coords(target_ds)
 
@@ -497,6 +705,9 @@ def regrid(source_ds, target_ds, method, weights_path, rename_dict):
     elif isinstance(source_ds, xr.DataArray):
         if "lon_bnds" not in source_ds.coords or "lat_bnds" not in source_ds.coords:
             source_ds = ensure_bounds(source_ds)
+
+    source_ds = reduce_bounds(source_ds)
+    target_ds = reduce_bounds(target_ds)
 
     weights_file = Path(weights_path)
     reuse_weights = weights_file.is_file()
@@ -543,18 +754,63 @@ def standardize_coords(ds):
 
 # clear
 def load_target_files(target_path, infor, sinfor, version, var, year):
-    pattern = f"{target_path}/{infor}/{var}/{sinfor}/{version}/{var}_*{year}*.nc"
+    """
+    Load target files based on the specified pattern.
+
+    Args:
+        target_path (str): The base directory path where the target files are located.
+        infor (str): Information string used in the file path.
+        sinfor (str): Secondary information string used in the file path.
+        version (str): Version string used in the file path.
+        var (str): Variable name used in the file path.
+        year (int): Year used in the file path.
+
+    Returns:
+        list: A sorted list of file paths matching the specified pattern.
+    """
+    pattern = f"{target_path}/{infor}/{var}/g*/v*/{var}_*{year}*.nc"
     return sorted(glob.glob(pattern))
 
 
 # clear
 def load_datasets(year, month, files, chunks):
+    """
+    Load and filter datasets based on the specified year and month.
+
+    Parameters:
+    year (int): The year to filter the dataset.
+    month (int): The month to filter the dataset.
+    files (list of str): List of file paths to be loaded.
+    chunks (dict): Dictionary specifying the chunk sizes for dask.
+
+    Returns:
+    xarray.Dataset: The filtered dataset containing data only for the specified year and month.
+    """
     ds = xr.open_mfdataset(files, combine="by_coords", chunks=chunks)
     return ds.sel(time=(ds["time"].dt.year == year) & (ds["time"].dt.month == month))
 
 
 # clear
 def process_year_month(config, year, month):
+    """
+    Processes data for a given year and month based on the provided configuration.
+
+    This function loads datasets for selected variables and temperature/humidity variables,
+    clips the latitude values to the range [-90, 90], and checks if there is any data available
+    for the specified year and month. If no data is available, it raises a ValueError.
+    Finally, it processes the geopotential height using the loaded datasets.
+
+    Parameters:
+    config (dict): Configuration dictionary containing paths and other settings.
+    year (int): The year for which data is to be processed.
+    month (int): The month for which data is to be processed.
+
+    Returns:
+    Any: The result of the `process_geopotential_height` function.
+
+    Raises:
+    ValueError: If no data is available for the specified year, month, and variable.
+    """
     selected_variables = [config["var_interp"]]
     tq_variables = ["ta", "hus"]
 
@@ -606,6 +862,19 @@ def process_year_month(config, year, month):
 
 # clear
 def process_geopotential_height(config, target_grids, tq_grids, year, month):
+    """
+    Processes the geopotential height based on the configuration and target grids.
+
+    Parameters:
+    config (dict): Configuration dictionary containing various settings and paths.
+    target_grids (dict): Dictionary containing target grid datasets.
+    tq_grids (dict): Dictionary containing temperature and specific humidity grids.
+    year (int): The year for which the processing is being done.
+    month (int): The month for which the processing is being done.
+
+    Returns:
+    tuple: A tuple containing the processed geopotential height data, target grids, and tq grids.
+    """
     if (
         target_grids[config["var_interp"]].lev.standard_name
         == "atmosphere_hybrid_height_coordinate"
@@ -625,17 +894,50 @@ def process_geopotential_height(config, target_grids, tq_grids, year, month):
         target_grids[config["var_interp"]].lev.standard_name
         == "atmosphere_hybrid_sigma_pressure_coordinate"
     ):
-        compute_or_load_geopotential(config, target_grids, tq_grids, year, month)
+        return compute_or_load_geopotential(config, target_grids, tq_grids, year, month)
 
 
 # clear
 def compute_or_load_geopotential(config, target_grids, tq_grids, year, month):
+    """
+    Compute or load geopotential height for a given year and month.
+
+    Parameters:
+    config (dict): Configuration dictionary containing paths and settings.
+    target_grids (dict): Dictionary containing target grid data.
+    tq_grids (dict): Dictionary containing temperature and specific humidity grids.
+    year (int): Year for which to compute or load geopotential height.
+    month (int): Month for which to compute or load geopotential height.
+
+    Returns:
+    tuple: A tuple containing:
+        - target_zfull (xarray.DataArray): Geopotential height data.
+        - target_grids (dict): Updated target grid data.
+        - tq_grids (dict): Updated temperature and specific humidity grids.
+
+    Raises:
+    FileNotFoundError: If no orography files are found at the specified path.
+    """
     if config["target_g_path"] == "None":
         target_t = tq_grids["ta"]
-        target_q = tq_grids["hus"]
+        # target_q = tq_grids["hus"]
         target_p = calculate_pressure_levels(target_t.ap, target_t.b, target_t.ps)
+        # orog = xr.open_dataset(
+        #     f"{config['target_path']}/fx/orog/{config['sinfor']}/v*/orog_fx_*.nc"
+        # )["orog"]
+        # Load orography from the target dataset
+        orog_path = glob.glob(
+            f"{config['target_orog_path']}/fx/orog/g*/v*/orog_fx_*.nc"
+        )
+        # Check if orog_path is empty
+        if not orog_path:
+            raise FileNotFoundError(
+                f"No orography files found at {config['target_orog_path']}"
+            )
+
+        orog = xr.open_dataset(orog_path[0], chunks={"lat": -1, "lon": -1})["orog"]
         target_zfull = (
-            compute_geopotential_height(target_p, target_t.ta)
+            compute_geopotential_height(target_p, target_t.ta, orog)
             .chunk({"time": 10, "lev": -1, "lat": -1, "lon": -1})
             .transpose("time", "lev", "lat", "lon")
             .persist()
@@ -655,17 +957,50 @@ def compute_or_load_geopotential(config, target_grids, tq_grids, year, month):
         )
         target_zfull = selected_target_z.rename({"z": "zfull"}).persist()
 
-    return target_zfull, target_grids
+    return target_zfull, target_grids, tq_grids
 
 
 # clear
 def load_input_files(input_path, var, year, month):
+    """
+    Load input files matching a specific pattern.
+
+    This function generates a file pattern based on the provided input path, variable name,
+    year, and month, and returns a sorted list of file paths that match the pattern.
+
+    Parameters:
+    input_path (str): The base directory path where the files are located.
+    var (str): The variable name to include in the file pattern.
+    year (int): The year to include in the file pattern.
+    month (int): The month to include in the file pattern (1-12).
+
+    Returns:
+    list: A sorted list of file paths that match the generated pattern.
+    """
     pattern = f"{input_path}/{var}/{year}/{var}_*_{year}{month:02d}*.nc"
     return sorted(glob.glob(pattern))
 
 
 # clear
 def load_input_data(input_files):
+    """
+    Load input data from a list of NetCDF files and standardize coordinates.
+
+    This function opens multiple NetCDF files specified in the input_files list,
+    determines an appropriate chunking strategy based on the dimensions of the
+    first file, and combines the datasets by coordinates. The resulting dataset
+    is then standardized in terms of its coordinates.
+
+    Parameters:
+    -----------
+    input_files : list of str
+        List of file paths to the NetCDF files to be loaded.
+
+    Returns:
+    --------
+    xarray.Dataset
+        The combined and standardized dataset.
+    """
     # with xr.open_dataset(input_files[0]) as temp_ds:
     #     # Determine chunking strategy based on dimensions
     #     chunks = {dim: "auto" for dim in temp_ds.dims}
@@ -674,10 +1009,43 @@ def load_input_data(input_files):
     return standardize_coords(ds)
 
 
+def get_vertical_dim_name(da):
+    for dim in da.dims:
+        if dim in ("lev", "level", "height", "plev"):
+            return dim
+    raise ValueError("Vertical dimension not found.")
+
+
 def regrid_and_interpolate(
     config, input_var, target_var, year, month, target_grids, target_zfull_per, tq_grids
 ):
+    """
+    Regrids and interpolates input data to match the target grid and vertical levels.
 
+    Parameters:
+    -----------
+    config : dict
+        Configuration dictionary containing paths, model information, and other settings.
+    input_var : str
+        The variable name in the input data (e.g., 'u', 'v', 'q').
+    target_var : str
+        The variable name in the target data (e.g., 'ua', 'va').
+    year : int
+        The year of the data to process.
+    month : int
+        The month of the data to process.
+    target_grids : dict
+        Dictionary containing target grid datasets.
+    target_zfull_per : xarray.Dataset
+        Dataset containing the target vertical levels.
+    tq_grids : dict
+        Dictionary containing temperature and specific humidity grids.
+
+    Returns:
+    --------
+    xarray.Dataset
+        Interpolated dataset with the same structure as the target grid.
+    """
     method = (
         "bilinear"
         if input_var in ["u", "v"]
@@ -743,7 +1111,7 @@ def regrid_and_interpolate(
     # plt.show()
 
     # geopotential
-    if config["input_z_path"]:
+    if config["input_z_path"] not in [None, "None"]:
         input_z_files = glob.glob(
             f"{config['input_z_path']}/{year}/*{year}{month:02d}*.nc"
         )
@@ -756,11 +1124,15 @@ def regrid_and_interpolate(
         )
     else:
         g_era5_resampled, input_grids, tq_input_grids = process_year_month(
-            config, config["input_path"], year, month
+            config, year, month
         )
         g_era5_resampled = standardize_coords_from(g_era5_resampled)
 
     target_zfull_per = standardize_coords_from(target_zfull_per)
+
+    if isinstance(g_era5_resampled, xr.DataArray):
+        g_era5_resampled = g_era5_resampled.to_dataset(name="zfull")
+
     old_var_name = list(g_era5_resampled.data_vars)[0]
     rename_dict_z = {old_var_name: "zfull"}
 
@@ -804,11 +1176,13 @@ def regrid_and_interpolate(
     # Perform calculations
     g_era5 = sliced_g_era5_regridded["zfull"]  # Assuming 'zfull' is geopotential height
 
+    vdim = get_vertical_dim_name(g_era5)
+
     if config["input_model"] == "reanalysis":
         Z_era5 = geopotential_to_geopotential_height(g_era5)
-        Z_era5_per = Z_era5.persist().chunk({"level": -1})
+        Z_era5_per = Z_era5.persist().chunk({vdim: -1})
     else:
-        Z_era5_per = g_era5.persist().chunk({"level": -1})
+        Z_era5_per = g_era5.persist().chunk({vdim: -1})
 
     if target_var in ["ua", "va"]:
         # print('target_zfull_per_ua_va', target_zfull_per)
@@ -842,7 +1216,11 @@ def regrid_and_interpolate(
         # print('Z_era5_per', Z_era5_per)
         # print('sliced_gcm_z_data_interp', sliced_gcm_z_data_interp)
         interpolated_ds = vertical_interpolation(
-            sliced_do[target_var], Z_era5_per, sliced_gcm_z_data_interp
+            sliced_do[target_var],
+            Z_era5_per,
+            sliced_gcm_z_data_interp,
+            target_ds[target_var],
+            sliced_gcm_z_data_interp,
         )
     else:
         sliced_target_zfull = target_zfull_per.sel(
@@ -850,7 +1228,11 @@ def regrid_and_interpolate(
             lon=slice(config["lon_min"], config["lon_max"]),
         ).chunk({"lev": -1})
         interpolated_ds = vertical_interpolation(
-            sliced_do[target_var], Z_era5_per, sliced_target_zfull
+            sliced_do[target_var],
+            Z_era5_per,
+            sliced_target_zfull,
+            target_ds[target_var],
+            sliced_target_zfull,
         )
 
     interpolated_ds = interpolated_ds.transpose("time", "lev", "lat", "lon").chunk(
@@ -883,6 +1265,22 @@ def regrid_and_interpolate(
 def process_input_variable(
     config, input_var, target_var, year, month, target_grids, target_zfull, tq_grids
 ):
+    """
+    Processes the input variable by regridding and interpolating it to the target grids and saves the result.
+
+    Parameters:
+    config (dict): Configuration dictionary containing various settings and paths.
+    input_var (str): Name of the input variable to be processed.
+    target_var (str): Name of the target variable after processing.
+    year (int): Year of the data to be processed.
+    month (int): Month of the data to be processed.
+    target_grids (xarray.Dataset): Target grids for regridding.
+    target_zfull (xarray.DataArray): Full vertical coordinate for the target grids.
+    tq_grids (xarray.Dataset): Grids for temperature and specific humidity.
+
+    Returns:
+    xarray.DataArray: Interpolated data array with the target variable.
+    """
     interpolated_ds = regrid_and_interpolate(
         config, input_var, target_var, year, month, target_grids, target_zfull, tq_grids
     )
@@ -899,7 +1297,7 @@ def process_input_variable(
     )
 
     interpolated_era5_da.attrs["interpolation_to"] = config["gname"]
-    output_file = f"{config['output_path']}/{target_var}_{config['input_model'] if config["input_model"] == 'reanalysis' else config["input_gname"]}_to_{config['gname']}_{year}-{month:02}.nc"
+    output_file = f"{config['output_path']}/{target_var}_{config['input_model'] if config['input_model'] == 'reanalysis' else config['input_gname']}_to_{config['gname']}_{year}-{month:02}.nc"
     save_interpolated_data(interpolated_era5_da, output_file)
     print(f"Saved regridded data for {target_var} {year}-{month:02} to {output_file}")
     return interpolated_era5_da
@@ -907,6 +1305,16 @@ def process_input_variable(
 
 # clear
 def save_interpolated_data(interpolated_era5_da, output_file):
+    """
+    Save the interpolated ERA5 data to a NetCDF file.
+
+    Parameters:
+    interpolated_era5_da (xarray.DataArray): The interpolated ERA5 data array to be saved.
+    output_file (str): The path to the output NetCDF file.
+
+    Returns:
+    None
+    """
     with ProgressBar():
         print(f"Writing to {output_file}")
         interpolated_era5_da.to_netcdf(output_file, compute=False).compute()
@@ -916,6 +1324,20 @@ def save_interpolated_data(interpolated_era5_da, output_file):
 
 
 def main(config):
+    """
+    Main function to perform interpolation of variables from observational data to GCM (General Circulation Model) grid.
+
+    Args:
+        config (dict): Configuration dictionary containing the following keys:
+            - "var_interp" (str): Variable to interpolate (e.g., "ua", "va", "ta", "hus").
+            - "startyear_h" (int): Start year for the interpolation.
+            - "endyear_h" (int): End year for the interpolation.
+            - "output_path" (str): Path to the directory where output files will be saved.
+            - "input_model" (str): Model type of the input data (e.g., "reanalysis").
+
+    Returns:
+        None
+    """
 
     client = setup_client()
 

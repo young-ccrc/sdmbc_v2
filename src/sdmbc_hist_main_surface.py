@@ -1,9 +1,9 @@
 """
 SDMBCv2 Historical Bias Correction Main Script for Surface Variables
 
-This script is used to perform bias correction on historical surface climate data 
-using the SDMBCv2 package. It uses Dask for parallel processing and handles 
-large-scale data processing, including loading, preprocessing, splitting domains 
+This script is used to perform bias correction on historical surface climate data
+using the SDMBCv2 package. It uses Dask for parallel processing and handles
+large-scale data processing, including loading, preprocessing, splitting domains
 into tiles, and bias correction.
 
 Key features of the script:
@@ -14,7 +14,7 @@ Key features of the script:
 - Optional drawing of figures and reformatting to original formats.
 
 Usage:
-This script can be executed by providing a configuration YAML file that defines 
+This script can be executed by providing a configuration YAML file that defines
 various input parameters, such as variable names, start and end years, paths, etc.
 
 Modules imported:
@@ -45,6 +45,7 @@ from bc_grid_function import (  # type: ignore
     bc_correction_grid_cell_future_dask_2d,
     bc_correction_grid_cell_future_multiprocess,
     bc_correction_grid_cell_hist_dask_2d,
+    convert_bc_params_to_xarray,
 )
 from config import config  # type: ignore
 
@@ -190,15 +191,10 @@ def main(config):
 
     # Validate inputs
     if config.bc_future:
-        bc_future_path = config.bc_future_path
         startyear_f = config.startyear_f
         endyear_f = config.endyear_f
-        infor_f = config.infor_f
-        gname_f = config.gname_f
         period_f = config.period_f
         cinfor_f = config.cinfor_f
-        sinfor_f = config.sinfor_f
-        version_f = config.version_f
         scenario = config.scenario
         cinfor_f = config.cinfor_f
         target_variable = config.target_variable
@@ -371,15 +367,35 @@ def main(config):
 
                 # Save each tile's bias-corrected output immediately to disk
                 output_file = f"{temp_dir}/bc_corrected_tile_2d_{idx}_{lat_range[0]}_{lat_range[1]}_{lon_range[0]}_{lon_range[1]}.nc"
-                bc_corrected_gcm_hist_tile.compute().to_netcdf(
-                    output_file
-                )  # Save tile result
+                output_params = f"{temp_dir}/bc_params_tile_3d_{idx}_{lat_range[0]}_{lat_range[1]}_{lon_range[0]}_{lon_range[1]}.nc"
+                # Save the bias-corrected data for the tile
+                if not os.path.exists(output_file):
+                    print(f"Saving 2D bias-corrected for tile {idx} to {output_file}")
+                    bc_corrected_gcm_hist_tile.compute().to_netcdf(
+                        output_file
+                    )  # Save tile result
+                else:
+                    print(f"File {output_file} already exists. Skipping...")
+
+                # Save the bc_params for each tile
+                obs_tile = sliced_obs.sel(lat=slice(*lat_range), lon=slice(*lon_range))
+                tile_lat = obs_tile["lat"].values
+                tile_lon = obs_tile["lon"].values
+                ds_params = convert_bc_params_to_xarray(
+                    bc_params_tile, tile_lat, tile_lon
+                )
+
+                if not os.path.exists(output_params):
+                    print(f"Saving 2D params for tile {idx} to {output_params}")
+                    ds_params.to_netcdf(output_params)
+                else:
+                    print(f"File {output_params} already exists. Skipping...")
 
                 # Accumulate bc_params_tile for later concatenation
                 all_bc_params.append(bc_params_tile)
 
                 # Free memory after saving each tile
-                del bc_corrected_gcm_hist_tile
+                del bc_corrected_gcm_hist_tile, ds_params
                 # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
 
             except Exception as e:
@@ -413,33 +429,33 @@ def main(config):
             tile_files, combine="by_coords"
         )  # Combine by matching coordinates
 
-        # Extract the original latitude and longitude values (with duplicates)
-        original_lat_values = full_bc_corrected["lat"].values
-        original_lon_values = full_bc_corrected["lon"].values
+        # # Extract the original latitude and longitude values (with duplicates)
+        # original_lat_values = full_bc_corrected["lat"].values
+        # original_lon_values = full_bc_corrected["lon"].values
 
-        # Identify indices of duplicate values and determine which to remove
-        # Identify duplicated latitudes and keep only the first occurrence
-        _, lat_unique_indices = np.unique(original_lat_values, return_index=True)
-        # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
-        lat_indices_to_remove = np.setdiff1d(
-            np.arange(len(original_lat_values)), lat_unique_indices
-        )
+        # # Identify indices of duplicate values and determine which to remove
+        # # Identify duplicated latitudes and keep only the first occurrence
+        # _, lat_unique_indices = np.unique(original_lat_values, return_index=True)
+        # # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
+        # lat_indices_to_remove = np.setdiff1d(
+        #     np.arange(len(original_lat_values)), lat_unique_indices
+        # )
 
-        # Identify duplicated longitudes and keep only the first occurrence
-        _, lon_unique_indices = np.unique(original_lon_values, return_index=True)
-        # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
-        lon_indices_to_remove = np.setdiff1d(
-            np.arange(len(original_lon_values)), lon_unique_indices
-        )
+        # # Identify duplicated longitudes and keep only the first occurrence
+        # _, lon_unique_indices = np.unique(original_lon_values, return_index=True)
+        # # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
+        # lon_indices_to_remove = np.setdiff1d(
+        #     np.arange(len(original_lon_values)), lon_unique_indices
+        # )
 
-        # Remove duplicate rows and columns from the full parameter array
-        # Assuming full_param_array has shape (146, 193) that includes duplicated values
-        full_param_array_corrected = np.delete(
-            full_param_array, lat_indices_to_remove, axis=0
-        )  # Remove the duplicate latitude rows
-        full_param_array_corrected = np.delete(
-            full_param_array_corrected, lon_indices_to_remove, axis=1
-        )  # Remove the duplicate longitude columns
+        # # Remove duplicate rows and columns from the full parameter array
+        # # Assuming full_param_array has shape (146, 193) that includes duplicated values
+        # full_param_array_corrected = np.delete(
+        #     full_param_array, lat_indices_to_remove, axis=0
+        # )  # Remove the duplicate latitude rows
+        # full_param_array_corrected = np.delete(
+        #     full_param_array_corrected, lon_indices_to_remove, axis=1
+        # )  # Remove the duplicate longitude columns
 
         # Remove duplicate rows and columns from the full_bc_corrected dataset
         full_bc_corrected = full_bc_corrected.drop_duplicates("lat").drop_duplicates(
@@ -499,11 +515,23 @@ def main(config):
 
         print("save the bc model")
         full_bc_corrected = full_bc_corrected.astype("float32")
-        # Save the BC model
-        np.save(
-            f"{out_path}/bc_params_2d_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
-            full_param_array_corrected,
-        )
+        # # Save the BC model
+        # np.save(
+        #     f"{out_path}/bc_params_2d_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
+        #     full_param_array_corrected,
+        # )
+        # Merge all tile bc_params NetCDF files into a single xarray Dataset for the whole domain.
+        # This uses xarray's open_mfdataset which combines datasets by matching coordinate values.
+        ds_full_params = xr.open_mfdataset(all_bc_params, combine="by_coords")
+
+        # If for any reason duplicate lat or lon values exist, remove duplicates.
+        # xarray's merge usually handles non-overlapping coordinates, but if needed:
+        ds_full_params = ds_full_params.drop_duplicates("lat").drop_duplicates("lon")
+
+        # Save the merged full-domain bias-correction parameters as a single NetCDF file.
+        full_params_output = f"{out_path}/bc_params_2d_{period}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.nc"
+        ds_full_params.to_netcdf(full_params_output)
+        print("Saved full domain bc_params to", full_params_output)
 
         if config.save_bc_output:
             # save the bias corrected data # from input gcm or obs to target gcm
@@ -511,30 +539,31 @@ def main(config):
                 f"{out_path}/bc_corrected_2d_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
             )
 
-        # Remove the temporary directory and its contents
-        shutil.rmtree(temp_dir)
-        print("Intermediate files deleted.")
+        del full_bc_corrected, ds_full_params
+        # # Remove the temporary directory and its contents
+        # shutil.rmtree(temp_dir)
+        # print("Intermediate files deleted.")
 
-        # Log the time taken for this level
-        end_time = time.time()
-        elapsed_time_minutes = (
-            end_time - start_time
-        ) / 60  # Convert seconds to minutes
-        print(f"Completed processing in {elapsed_time_minutes:.2f} minutes")
+        # # Log the time taken for this level
+        # end_time = time.time()
+        # elapsed_time_minutes = (
+        #     end_time - start_time
+        # ) / 60  # Convert seconds to minutes
+        # print(f"Completed processing in {elapsed_time_minutes:.2f} minutes")
 
-        if config.draw_figure:
-            print("Figure 2d field")
-            figure_surface(
-                out_path,
-                obs_path,
-                startyear_h,
-                endyear_h,
-                lat_range,
-                lon_range,
-                save_figure_surface,
-                out_figure_path,
-            )
-            print("Finish 2d field")
+        # if config.draw_figure:
+        #     print("Figure 2d field")
+        #     figure_surface(
+        #         out_path,
+        #         obs_path,
+        #         startyear_h,
+        #         endyear_h,
+        #         lat_range,
+        #         lon_range,
+        #         save_figure_surface,
+        #         out_figure_path,
+        #     )
+        #     print("Finish 2d field")
 
         if config.reformat_to_original:
             print("Start reformatting")
@@ -561,8 +590,22 @@ def main(config):
         # Record the start time for this level
         start_time = time.time()
         level = 0
+        domain = split_domain(
+            lat_min,
+            lat_max,
+            lon_min,
+            lon_max,
+            n_lat_tiles=1,
+            n_lon_tiles=1,
+        )
+
         sliced_gcm_future = load_and_combine_variables(
-            variables, level, startyear_f, endyear_f, data_type="validation_gcm"
+            domain[0],
+            variables,
+            level,
+            startyear_f,
+            endyear_f,
+            data_type="validation_gcm",
         )
 
         reshaped_gcm_delayed_f = extract_and_reshape_delayed(
@@ -570,19 +613,25 @@ def main(config):
         )
         reshaped_gcm_delayed_f += 273.15
 
-        bc_params_array_loaded = np.load(
-            f"{config.out_path}/bc_params_2d_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
-            allow_pickle=True,
-        )
+        # bc_params_array_loaded = np.load(
+        #     f"{config.out_path}/bc_params_2d_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
+        #     allow_pickle=True,
+        # )
 
-        # Convert a dictionary to SimpleNamespace for easier attribute access
+        # # Convert a dictionary to SimpleNamespace for easier attribute access
 
-        # Assuming the shape is (1, 3) and contains dictionaries
-        for i in range(bc_params_array_loaded.shape[0]):
-            for j in range(bc_params_array_loaded.shape[1]):
-                bc_params_array_loaded[i, j] = dict_to_simplenamespace(
-                    bc_params_array_loaded[i, j]
-                )
+        # # Assuming the shape is (1, 3) and contains dictionaries
+        # for i in range(bc_params_array_loaded.shape[0]):
+        #     for j in range(bc_params_array_loaded.shape[1]):
+        #         bc_params_array_loaded[i, j] = dict_to_simplenamespace(
+        #             bc_params_array_loaded[i, j]
+        #         )
+        # Create a temporary folder for saving intermediate files
+        temp_dir = os.path.join(out_path, "temp_tiles_surface")
+        os.makedirs(temp_dir, exist_ok=True)
+
+        output_params = f"{out_path}/bc_params_2d_{period}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.nc"
+        bc_params_array_loaded = xr.load_dataset(output_params)
 
         # reshaped_gcm_delayed_f = reshaped_gcm_delayed_f.astype("float32")
 
@@ -590,10 +639,6 @@ def main(config):
         #     reshaped_gcm_delayed_f, lat_min, lat_max, lon_min, lon_max
         # )
         # print(f"Generated {n_lat_tiles} x {n_lon_tiles} tiles.")
-
-        # Create a temporary folder for saving intermediate files
-        temp_dir = os.path.join(out_path, "temp_tiles_surface")
-        os.makedirs(temp_dir, exist_ok=True)
 
         # print("start dask bc correction")
 
@@ -649,9 +694,7 @@ def main(config):
         )
 
         # Save results to NetCDF
-        output_file = (
-            f"{temp_dir}/bc_corrected_future_2d_{gname}_{startyear_f}_{endyear_f}.nc"
-        )
+        output_file = f"{temp_dir}/bc_corrected_{config.period_f}_2d_{gname}_{startyear_f}_{endyear_f}.nc"
         bc_corrected_gcm_future.to_netcdf(output_file)
 
         # Concatenate all bc_params along the latitude and longitude
@@ -668,24 +711,24 @@ def main(config):
         # )  # Combine by matching coordinates
         full_bc_corrected = xr.open_dataset(output_file)
 
-        # Extract the original latitude and longitude values (with duplicates)
-        original_lat_values = full_bc_corrected["lat"].values
-        original_lon_values = full_bc_corrected["lon"].values
+        # # Extract the original latitude and longitude values (with duplicates)
+        # original_lat_values = full_bc_corrected["lat"].values
+        # original_lon_values = full_bc_corrected["lon"].values
 
-        # Identify indices of duplicate values and determine which to remove
-        # Identify duplicated latitudes and keep only the first occurrence
-        _, lat_unique_indices = np.unique(original_lat_values, return_index=True)
-        # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
-        lat_indices_to_remove = np.setdiff1d(
-            np.arange(len(original_lat_values)), lat_unique_indices
-        )
+        # # Identify indices of duplicate values and determine which to remove
+        # # Identify duplicated latitudes and keep only the first occurrence
+        # _, lat_unique_indices = np.unique(original_lat_values, return_index=True)
+        # # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
+        # lat_indices_to_remove = np.setdiff1d(
+        #     np.arange(len(original_lat_values)), lat_unique_indices
+        # )
 
-        # Identify duplicated longitudes and keep only the first occurrence
-        _, lon_unique_indices = np.unique(original_lon_values, return_index=True)
-        # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
-        lon_indices_to_remove = np.setdiff1d(
-            np.arange(len(original_lon_values)), lon_unique_indices
-        )
+        # # Identify duplicated longitudes and keep only the first occurrence
+        # _, lon_unique_indices = np.unique(original_lon_values, return_index=True)
+        # # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
+        # lon_indices_to_remove = np.setdiff1d(
+        #     np.arange(len(original_lon_values)), lon_unique_indices
+        # )
 
         # Remove duplicate rows and columns from the full_bc_corrected dataset
         full_bc_corrected = full_bc_corrected.drop_duplicates("lat").drop_duplicates(
@@ -747,15 +790,19 @@ def main(config):
         full_bc_corrected = full_bc_corrected.astype("float32")
 
         if config.save_bc_output:
+            full_bc_corrected.load().to_netcdf(
+                f"{out_path}/bc_corrected_2d_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_f}_{endyear_f}.nc"
+            )
+
             # save the bias corrected data # from input gcm or obs to target gcm
-            if config.period == "validation":
-                full_bc_corrected.load().to_netcdf(
-                    f"{out_path}/bc_corrected_2d_validation_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_f}_{endyear_f}.nc"
-                )
-            elif config.period == "future":
-                full_bc_corrected.load().to_netcdf(
-                    f"{out_path}/bc_corrected_2d_future_{infor}_{gname}_{period_f}_{cinfor_f}_{scenario}_{startyear_f}_{endyear_f}.nc"
-                )
+            # if config.period == "validation":
+            #     full_bc_corrected.load().to_netcdf(
+            #         f"{out_path}/bc_corrected_2d_{config.period_f}}_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_f}_{endyear_f}.nc"
+            #     )
+            # elif config.period == "future":
+            #     full_bc_corrected.load().to_netcdf(
+            #         f"{out_path}/bc_corrected_2d_{config.period_f}_{infor}_{gname}_{period_f}_{cinfor_f}_{scenario}_{startyear_f}_{endyear_f}.nc"
+            #     )
 
         # Remove the temporary directory and its contents
         shutil.rmtree(temp_dir)
@@ -768,19 +815,19 @@ def main(config):
         ) / 60  # Convert seconds to minutes
         print(f"Completed processing in {elapsed_time_minutes:.2f} minutes")
 
-        if config.draw_figure:
-            print("Figure 2d field")
-            figure_surface(
-                out_path,
-                obs_path,
-                startyear_f,
-                endyear_f,
-                lat_range,
-                lon_range,
-                save_figure_surface,
-                out_figure_path,
-            )
-            print("Finish 2d field")
+        # if config.draw_figure:
+        #     print("Figure 2d field")
+        #     figure_surface(
+        #         out_path,
+        #         obs_path,
+        #         startyear_f,
+        #         endyear_f,
+        #         lat_range,
+        #         lon_range,
+        #         save_figure_surface,
+        #         out_figure_path,
+        #     )
+        #     print("Finish 2d field")
 
         if config.reformat_to_original:
             print("Start reformatting")

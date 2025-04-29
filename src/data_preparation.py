@@ -1,32 +1,32 @@
 """
 Data Preparation Module for SDMBCv2
 
-This script provides a comprehensive set of functions used for preparing climate data 
-for bias correction within the SDMBCv2 framework. It includes functionalities to load, 
-preprocess, and reshape GCM and observational data to ensure the correct format and 
-structure required for the bias correction process. This module is intended to support 
+This script provides a comprehensive set of functions used for preparing climate data
+for bias correction within the SDMBCv2 framework. It includes functionalities to load,
+preprocess, and reshape GCM and observational data to ensure the correct format and
+structure required for the bias correction process. This module is intended to support
 both historical and future climate model data as well as observational datasets.
 
 Main Features of the Script:
-- **Configuration Management**: Load configuration settings from a YAML file to customize 
+- **Configuration Management**: Load configuration settings from a YAML file to customize
   parameters for different experiments.
-- **Data Loading and Preprocessing**: Load GCM, observational, and future climate data, 
-  and preprocess them for bias correction, including operations like slicing, combining 
+- **Data Loading and Preprocessing**: Load GCM, observational, and future climate data,
+  and preprocess them for bias correction, including operations like slicing, combining
   multiple variables, and rescaling.
-- **Temporal Adjustments**: Convert between different temporal resolutions (daily to 
+- **Temporal Adjustments**: Convert between different temporal resolutions (daily to
   6-hourly) using fractional scaling to preserve physical characteristics.
-- **Spatial Adjustments**: Split the spatial domain into tiles, apply boundary corrections, 
+- **Spatial Adjustments**: Split the spatial domain into tiles, apply boundary corrections,
   and handle rescaling of GCM data to better match observational data.
-- **Validation and Verification**: Validate data integrity, such as ensuring the absence 
+- **Validation and Verification**: Validate data integrity, such as ensuring the absence
   of NaN values and verifying consistency between input files and expected parameters.
 
-The module is designed to facilitate efficient data preparation, including handling large-scale 
-datasets with Dask for parallel processing, and accommodating different spatial and temporal 
+The module is designed to facilitate efficient data preparation, including handling large-scale
+datasets with Dask for parallel processing, and accommodating different spatial and temporal
 resolutions.
 
 Usage:
-This script is not intended to be run directly but rather imported into other scripts 
-as part of the SDMBCv2 workflow. The functions provide modular capabilities to handle 
+This script is not intended to be run directly but rather imported into other scripts
+as part of the SDMBCv2 workflow. The functions provide modular capabilities to handle
 a variety of preprocessing steps for GCM and observational data.
 
 Modules Imported:
@@ -41,7 +41,6 @@ import math
 import re
 
 import dask  # type: ignore
-
 # import dask.array as da  # type: ignore
 import numpy as np  # arrays and matrix math # type: ignore
 import pandas as pd  # type: ignore
@@ -977,40 +976,126 @@ def convert_6hr_to_original_xr(bias_corrected_data_xr, g_u_xr, g_v_xr):
     return converted_data_xr
 
 
-def determine_tiles(file_paths, var, lat_min, lat_max, lon_min, lon_max):
+def expand_config_bounds_from_data(lat_min, lat_max, lon_min, lon_max, sample_file):
     """
-    Determines the number of tiles based on the total number of grid points.
+    Dynamically expands latitude and longitude bounds based on the grid step
+    detected from a sample NetCDF file.
 
     Args:
-        ds_tile (Dataset): Xarray Dataset.
+        config: Configuration object containing lat/lon boundaries.
+        sample_file (str): Path to a sample NetCDF file to detect lat/lon resolution.
+
+    Returns:
+        Updated configuration with expanded lat/lon bounds.
+    """
+
+    # Load a small dataset to detect lat/lon spacing
+    sample_data = xr.open_dataset(sample_file)
+    # Compute grid spacing
+    lat_step = np.abs(sample_data.lat[1].values - sample_data.lat[0].values)
+    lon_step = np.abs(sample_data.lon[1].values - sample_data.lon[0].values)
+    
+    # Expand the domain before loading full dataset
+    latmin = lat_min - lat_step
+    latmax = lat_max + lat_step
+    lonmin = lon_min - lon_step
+    lonmax = lon_max + lon_step
+    sample_data = sample_data.sel(lat = slice(latmin, latmax), lon = slice(lonmin, lonmax))
+    lat_size, lon_size = sample_data.sizes["lat"], sample_data.sizes["lon"]
+    lat_values = sample_data.lat.values
+    lon_values = sample_data.lon.values
+    latmin = lat_values.min()
+    latmax = lat_values.max()
+    lonmin = lon_values.min()
+    lonmax = lon_values.max()
+
+    return latmin, latmax, lonmin, lonmax, lat_size, lon_size, lat_values, lon_values
+
+
+def determine_tiles(lat_size, lon_size, max_tile_size=config.max_tile_size):
+    """
+    Determines the number of tiles based on the total number of grid points using an index-based tiling approach.
+
+    Args:
+        file_paths (dict): Dictionary of file paths for each variable.
+        var (str): Variable name used to extract the dataset.
+        lat_size (int): Total number of latitude grid cells.
+        lon_size (int): Total number of longitude grid cells.
+        max_tile_size (int): Maximum allowed tile size (default: 1500 grid cells).
 
     Returns:
         (int, int): Number of tiles for latitude and longitude.
     """
 
-    ds_tile = xr.open_dataset(file_paths[var][0])
-    max_tile_size = 1500
-    # Use the first variable's file paths to determine grid size
-    ds_tile = ds_tile.sel(lat=slice(lat_min, lat_max), lon=slice(lon_min, lon_max))
-    lat_size = ds_tile.sizes["lat"]
-    lon_size = ds_tile.sizes["lon"]
-
-    # Calculate total grid points and determine the number of tiles
+    # Compute total number of grid points
     total_points = lat_size * lon_size
 
-    # Calculate approximate tiles based on max_tile_size
+    # Estimate number of tiles needed
     approx_tiles = math.ceil(total_points / max_tile_size)
-    ratio = (lat_max - lat_min) / (lon_max - lon_min)
+    ratio = lat_size / lon_size  # Maintain lat/lon aspect ratio
 
-    # Distribute tiles proportionally between latitude and longitude
+    # Determine the number of tiles along latitude and longitude
     n_lat_tiles = max(1, round(math.sqrt(approx_tiles * ratio)))
     n_lon_tiles = max(1, round(approx_tiles / n_lat_tiles))
 
-    # Adjust to ensure tiles are within reasonable bounds
+    # Ensure tile counts do not exceed actual grid size
     n_lat_tiles = min(n_lat_tiles, lat_size)
     n_lon_tiles = min(n_lon_tiles, lon_size)
 
     return n_lat_tiles, n_lon_tiles
+
+
+def split_domain(n_lat_tiles, n_lon_tiles, lat_values, lon_values):
+    """
+    Splits the domain into index-based tiles, expanding edge tiles by half a grid cell.
+
+    Args:
+        ds (xarray.Dataset): Dataset containing lat/lon coordinates.
+        n_lat_tiles (int): Number of tiles in the latitude direction.
+        n_lon_tiles (int): Number of tiles in the longitude direction.
+
+    Returns:
+        list: List of dictionaries containing index ranges and adjusted coordinate bounds for each tile.
+    """
+
+    # lat_values = ds.lat.values
+    # lon_values = ds.lon.values
+
+    lat_size = len(lat_values)
+    lon_size = len(lon_values)
+
+    lat_indices = np.linspace(0, lat_size, n_lat_tiles + 1, dtype=int)
+    lon_indices = np.linspace(0, lon_size, n_lon_tiles + 1, dtype=int)
+
+    # Compute grid spacing
+    dy = np.abs(lat_values[1] - lat_values[0])  # Latitude step size
+    dx = np.abs(lon_values[1] - lon_values[0])  # Longitude step size
+
+    tiles = []
+    for i in range(n_lat_tiles):
+        for j in range(n_lon_tiles):
+            lat_min_idx, lat_max_idx = lat_indices[i], lat_indices[i + 1]
+            lon_min_idx, lon_max_idx = lon_indices[j], lon_indices[j + 1]
+
+            lat_min = lat_values[lat_min_idx] - (dy / 2 if i >= 0 else 0)  # Expand bottom edge
+            lat_max = lat_values[lat_max_idx - 1] + (dy / 2 if i <= n_lat_tiles - 1 else 0)  # Expand top edge
+            
+            lon_min = lon_values[lon_min_idx] - (dx / 2 if j >= 0 else 0)  # Expand left edge
+            lon_max = lon_values[lon_max_idx - 1] + (dx / 2 if j <= n_lon_tiles - 1 else 0)  # Expand right edge
+            tiles.append(
+                {
+                    "lat_min_idx": lat_min_idx,
+                    "lat_max_idx": lat_max_idx,
+                    "lon_min_idx": lon_min_idx,
+                    "lon_max_idx": lon_max_idx,
+                    "lat_min": lat_min,
+                    "lat_max": lat_max,
+                    "lon_min": lon_min,
+                    "lon_max": lon_max,
+                }
+            )
+
+    return tiles
 
 
 def determine_base_path(year):

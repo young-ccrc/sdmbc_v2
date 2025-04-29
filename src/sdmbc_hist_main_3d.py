@@ -17,8 +17,9 @@ from dask.distributed import Client  # type: ignore
 from tqdm import tqdm  # type: ignore
 
 # import yaml  # type: ignore
-from bc_grid_function import load_preprocess_variable  # type: ignore
+# from bc_grid_function import load_preprocess_variable  # type: ignore
 from bc_grid_function import (
+    convert_bc_params_to_xarray,
     preprocess_and_save_gcm,
     preprocess_and_save_obs,
     process_tile,
@@ -29,9 +30,11 @@ from config import config  # type: ignore
 # from data_preparation import   # type: ignore
 from data_preparation import (
     determine_tiles,
+    expand_config_bounds_from_data,
     generate_file_paths,
     generate_file_paths_future,
     generate_file_paths_obs,
+    split_domain,
     validate_inputs,
 )
 from figurefunction import save_figure_3d
@@ -103,23 +106,52 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def split_domain(lat_min, lat_max, lon_min, lon_max, n_lat_tiles, n_lon_tiles):
-    # Create ranges for latitude and longitude tiles
-    lat_ranges = np.linspace(lat_min, lat_max, n_lat_tiles + 1, endpoint=True)
-    lon_ranges = np.linspace(lon_min, lon_max, n_lon_tiles + 1, endpoint=True)
+# def split_domain(lat_min, lat_max, lon_min, lon_max, n_lat_tiles, n_lon_tiles):
+#     # Create ranges for latitude and longitude tiles
+#     lat_ranges = np.linspace(lat_min, lat_max, n_lat_tiles + 1, endpoint=True)
+#     lon_ranges = np.linspace(lon_min, lon_max, n_lon_tiles + 1, endpoint=True)
 
-    tiles = []
-    for i in range(n_lat_tiles):
-        for j in range(n_lon_tiles):
-            tiles.append(
-                {
-                    "lat_min": lat_ranges[i],
-                    "lat_max": lat_ranges[i + 1],
-                    "lon_min": lon_ranges[j],
-                    "lon_max": lon_ranges[j + 1],
-                }
-            )
-    return tiles
+#     tiles = []
+#     for i in range(n_lat_tiles):
+#         for j in range(n_lon_tiles):
+#             tiles.append(
+#                 {
+#                     "lat_min": lat_ranges[i],
+#                     "lat_max": lat_ranges[i + 1],
+#                     "lon_min": lon_ranges[j],
+#                     "lon_max": lon_ranges[j + 1],
+#                 }
+#             )
+#     return tiles
+
+
+# def expand_config_bounds_from_data(config, sample_file):
+#     """
+#     Dynamically expands latitude and longitude bounds based on the grid step
+#     detected from a sample NetCDF file.
+
+#     Args:
+#         config: Configuration object containing lat/lon boundaries.
+#         sample_file (str): Path to a sample NetCDF file to detect lat/lon resolution.
+
+#     Returns:
+#         Updated configuration with expanded lat/lon bounds.
+#     """
+
+#     # Load a small dataset to detect lat/lon spacing
+#     sample_data = xr.open_dataset(sample_file)
+
+#     # Compute grid spacing
+#     lat_step = np.abs(sample_data.lat[1] - sample_data.lat[0])
+#     lon_step = np.abs(sample_data.lon[1] - sample_data.lon[0])
+
+#     # Expand the domain before loading full dataset
+#     config.lat_min -= lat_step
+#     config.lat_max += lat_step
+#     config.lon_min -= lon_step
+#     config.lon_max += lon_step
+
+#     return config.lat_min, config.lat_max, config.lon_min, config.lon_max
 
 
 def dict_to_simplenamespace(d):
@@ -207,32 +239,55 @@ def main(config):
         )
         for var in variables
     }
+    obs_path_f = "/g/data/w28/yk8692/input/era5/validation"
+    file_paths_by_variable_obs_f = {
+        var: (
+            generate_file_paths_obs(obs_path_f, var, gname, startyear_f, endyear_f)
+            if config.input_model == "reanalysis"
+            else generate_file_paths(
+                bc_hist_path,
+                var,
+                infor,
+                gname,
+                period,
+                cinfor,
+                sinfor,
+                version,
+                startyear_f,
+                endyear_f,
+            )
+        )
+        for var in variables
+    }
 
     # =============== Load obs end ===============
     # Dynamically determine number of tiles
 
-    n_lat_tiles, n_lon_tiles = determine_tiles(
-        file_paths_by_variable_obs, variables[0], lat_min, lat_max, lon_min, lon_max
+    lat_min, lat_max, lon_min, lon_max, lat_size, lon_size, lat_values, lon_values = (
+        expand_config_bounds_from_data(
+            lat_min,
+            lat_max,
+            lon_min,
+            lon_max,
+            file_paths_by_variable_obs[variables[0]][0],
+        )
     )
+    n_lat_tiles, n_lon_tiles = determine_tiles(lat_size, lon_size)
 
     print("start dask bc correction")
 
     tiles = split_domain(
-        lat_min,
-        lat_max,
-        lon_min,
-        lon_max,
-        n_lat_tiles=n_lat_tiles,
-        n_lon_tiles=n_lon_tiles,
+        n_lat_tiles,
+        n_lon_tiles,
+        lat_values,
+        lon_values,
     )
 
     domain = split_domain(
-        lat_min,
-        lat_max,
-        lon_min,
-        lon_max,
         n_lat_tiles=1,
         n_lon_tiles=1,
+        lat_values=lat_values,
+        lon_values=lon_values,
     )
 
     for level in range(slevel, elevel + 1):
@@ -243,6 +298,7 @@ def main(config):
         print(f"Starting processing for level {level}")
 
         temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{level}")
+
         os.makedirs(temp_dir, exist_ok=True)
         # ------------------ Load GCM Data ------------------
         temp_gcm = preprocess_and_save_gcm(
@@ -252,7 +308,7 @@ def main(config):
             level,
         )
         sliced_gcm = xr.open_dataset(
-            f"{temp_dir}/preprocessed_{gname}_lev_{level}_{lat_min}_{lat_max}_{lon_min}_{lon_max}.nc"
+            f"{temp_dir}/preprocessed_{gname}_lev_{level}_{domain[0]['lat_min']}_{domain[0]['lat_max']}_{domain[0]['lon_min']}_{domain[0]['lon_max']}.nc"
         )
 
         # ------------------ Load GCM Data end ------------------
@@ -273,7 +329,7 @@ def main(config):
             # Construct the path to the preprocessed file for this variable
             obs_file = os.path.join(
                 temp_dir,
-                f"preprocessed_obs_{var_name}_lev_{level}_{float(lat_min)}_{float(lat_max)}_{float(lon_min)}_{float(lon_max)}.nc",
+                f"preprocessed_obs_{var_name}_lev_{level}_{domain[0]['lat_min']}_{domain[0]['lat_max']}_{domain[0]['lon_min']}_{domain[0]['lon_max']}.nc",
             )
             sliced_obs[var_name] = xr.open_dataset(obs_file)[
                 var_name
@@ -304,79 +360,93 @@ def main(config):
                 #         )
                 lat_range = (tile["lat_min"], tile["lat_max"])
                 lon_range = (tile["lon_min"], tile["lon_max"])
-                try:
-                    # Define output file paths
-                    output_file = f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
-                    output_params = f"{temp_dir}/bc_params_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.npy"
+                # try:
+                # Define output file paths
+                output_file = f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+                output_params = f"{temp_dir}/bc_params_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
 
-                    obs_tile = sliced_obs.sel(
-                        lat=slice(*lat_range), lon=slice(*lon_range)
+                obs_tile = sliced_obs.sel(lat=slice(*lat_range), lon=slice(*lon_range))
+                gcm_tile = sliced_gcm.sel(lat=slice(*lat_range), lon=slice(*lon_range))
+                # # Check if both output files already exist
+                # if os.path.exists(output_file) and os.path.exists(output_params):
+                #     print(
+                #         f"Both output file and params for tile {idx}, level {level} already exist. Skipping..."
+                #     )
+                #     continue  # Skip processing this tile
+
+                # Process the tile if either output is missing
+                print(f"Processing tile {idx}, level {level}...")
+                bc_corrected_gcm_hist_tile, bc_params_tile = process_tile(
+                    gcm_tile,
+                    obs_tile,
+                    config,
+                )
+
+                # Save the bias-corrected output
+                if not os.path.exists(output_file):
+                    print(
+                        f"Saving 3D output for tile {idx}, level {level} to {output_file}"
                     )
-                    gcm_tile = sliced_gcm.sel(
-                        lat=slice(*lat_range), lon=slice(*lon_range)
+                    bc_corrected_gcm_hist_tile.compute().to_netcdf(output_file)
+                else:
+                    print(f"File {output_file} already exists. Skipping...")
+
+                # if isinstance(bc_params_tile, dict):
+                # Assume each tile hn be extracted from obs_tile or gcm_tile.
+                tile_lat = obs_tile["lat"].values
+                tile_lon = obs_tile["lon"].values
+                ds_params = convert_bc_params_to_xarray(
+                    bc_params_tile, tile_lat, tile_lon
+                )
+                # else:
+                #     ds_params = bc_params_tile
+
+                # Save the bias-correction parameters
+                # if not os.path.exists(output_params):
+                #     print(
+                #         f"Saving 3D params for tile {idx}, level {level} to {output_params}"
+                #     )
+                #     np.save(output_params, bc_params_tile)
+                # else:
+                #     print(f"File {output_params} already exists. Skipping...")
+                #     # continue
+                if not os.path.exists(output_params):
+                    print(
+                        f"Saving 3D params for tile {idx}, level {level} to {output_params}"
                     )
-                    # # Check if both output files already exist
-                    # if os.path.exists(output_file) and os.path.exists(output_params):
-                    #     print(
-                    #         f"Both output file and params for tile {idx}, level {level} already exist. Skipping..."
-                    #     )
-                    #     continue  # Skip processing this tile
+                    ds_params.to_netcdf(output_params)
+                else:
+                    print(f"File {output_params} already exists. Skipping...")
+                # # Accumulate bc_params_tile for later concatenation
+                #  all_bc_params.append(bc_params_tile)
+                # Append the bc_params file path for later merging
+                all_bc_params.append(output_params)
 
-                    # Process the tile if either output is missing
-                    print(f"Processing tile {idx}, level {level}...")
-                    bc_corrected_gcm_hist_tile, bc_params_tile = process_tile(
-                        gcm_tile,
-                        obs_tile,
-                        config,
-                    )
+                # Free memory after saving each tile
+                del bc_corrected_gcm_hist_tile, ds_params
+                # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
 
-                    # Save the bias-corrected output
-                    if not os.path.exists(output_file):
-                        print(
-                            f"Saving 3D output for tile {idx}, level {level} to {output_file}"
-                        )
-                        bc_corrected_gcm_hist_tile.compute().to_netcdf(output_file)
-                    else:
-                        print(f"File {output_file} already exists. Skipping...")
+                # except Exception as e:
+                #     print(f"Error processing tile {idx}: {e}")
+                #     # continue
 
-                    # Save the bias-correction parameters
-                    if not os.path.exists(output_params):
-                        print(
-                            f"Saving 3D params for tile {idx}, level {level} to {output_params}"
-                        )
-                        np.save(output_params, bc_params_tile)
-                    else:
-                        print(f"File {output_params} already exists. Skipping...")
-                        # continue
+            # # Concatenate all bc_params along the latitude and longitude
+            # # Initialize an empty list to hold rows of tiles for each latitude band
+            # lat_band_tiles = []as its own lat/lon coordinates that ca
 
-                    # Accumulate bc_params_tile for later concatenation
-                    all_bc_params.append(bc_params_tile)
+            # # Step 2: Iterate over the tiles and organize by rows
+            # for i in range(0, len(all_bc_params), n_lon_tiles):
+            #     # Extract a row of tiles (all tiles in the same latitude band)
+            #     row_tiles = all_bc_params[i : i + n_lon_tiles]
 
-                    # Free memory after saving each tile
-                    del bc_corrected_gcm_hist_tile
-                    # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
+            #     # Concatenate the row of tiles along the longitude (axis=1)
+            #     lat_band = np.concatenate(row_tiles, axis=1)
 
-                except Exception as e:
-                    print(f"Error processing tile {idx}: {e}")
-                    # continue
+            #     # Add the concatenated latitude band to the list
+            #     lat_band_tiles.append(lat_band)
 
-            # Concatenate all bc_params along the latitude and longitude
-            # Initialize an empty list to hold rows of tiles for each latitude band
-            lat_band_tiles = []
-
-            # Step 2: Iterate over the tiles and organize by rows
-            for i in range(0, len(all_bc_params), n_lon_tiles):
-                # Extract a row of tiles (all tiles in the same latitude band)
-                row_tiles = all_bc_params[i : i + n_lon_tiles]
-
-                # Concatenate the row of tiles along the longitude (axis=1)
-                lat_band = np.concatenate(row_tiles, axis=1)
-
-                # Add the concatenated latitude band to the list
-                lat_band_tiles.append(lat_band)
-
-            # Concatenate all latitude bands along the latitude (axis=0)
-            full_param_array = np.concatenate(lat_band_tiles, axis=0)
+            # # Concatenate all latitude bands along the latitude (axis=0)
+            # full_param_array = np.concatenate(lat_band_tiles, axis=0)
 
             # Load the bias-corrected tiles and combine them into a single dataset
             tile_files = [
@@ -387,33 +457,33 @@ def main(config):
                 tile_files, combine="by_coords"
             )  # Combine by matching coordinates
 
-            # Extract the original latitude and longitude values (with duplicates)
-            original_lat_values = full_bc_corrected["lat"].values
-            original_lon_values = full_bc_corrected["lon"].values
+            # # Extract the original latitude and longitude values (with duplicates)
+            # original_lat_values = full_bc_corrected["lat"].values
+            # original_lon_values = full_bc_corrected["lon"].values
 
-            # Identify indices of duplicate values and determine which to remove
-            # Identify duplicated latitudes and keep only the first occurrence
-            _, lat_unique_indices = np.unique(original_lat_values, return_index=True)
-            # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
-            lat_indices_to_remove = np.setdiff1d(
-                np.arange(len(original_lat_values)), lat_unique_indices
-            )
+            # # Identify indices of duplicate values and determine which to remove
+            # # Identify duplicated latitudes and keep only the first occurrence
+            # _, lat_unique_indices = np.unique(original_lat_values, return_index=True)
+            # # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
+            # lat_indices_to_remove = np.setdiff1d(
+            #     np.arange(len(original_lat_values)), lat_unique_indices
+            # )
 
-            # Identify duplicated longitudes and keep only the first occurrence
-            _, lon_unique_indices = np.unique(original_lon_values, return_index=True)
-            # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
-            lon_indices_to_remove = np.setdiff1d(
-                np.arange(len(original_lon_values)), lon_unique_indices
-            )
+            # # Identify duplicated longitudes and keep only the first occurrence
+            # _, lon_unique_indices = np.unique(original_lon_values, return_index=True)
+            # # Get all indices, and identify which ones are to be removed (i.e., not in the unique set)
+            # lon_indices_to_remove = np.setdiff1d(
+            #     np.arange(len(original_lon_values)), lon_unique_indices
+            # )
 
-            # Remove duplicate rows and columns from the full parameter array
-            # Assuming full_param_array has shape (146, 193) that includes duplicated values
-            full_param_array_corrected = np.delete(
-                full_param_array, lat_indices_to_remove, axis=0
-            )  # Remove the duplicate latitude rows
-            full_param_array_corrected = np.delete(
-                full_param_array_corrected, lon_indices_to_remove, axis=1
-            )  # Remove the duplicate longitude columns
+            # # Remove duplicate rows and columns from the full parameter array
+            # # Assuming full_param_array has shape (146, 193) that includes duplicated values
+            # full_param_array_corrected = np.delete(
+            #     full_param_array, lat_indices_to_remove, axis=0
+            # )  # Remove the duplicate latitude rows
+            # full_param_array_corrected = np.delete(
+            #     full_param_array_corrected, lon_indices_to_remove, axis=1
+            # )  # Remove the duplicate longitude columns
 
             # Remove duplicate rows and columns from the full_bc_corrected dataset
             full_bc_corrected = full_bc_corrected.drop_duplicates(
@@ -487,37 +557,47 @@ def main(config):
             full_bc_corrected = full_bc_corrected.astype("float32")  # save as float32
 
             # Save the BC model
-            np.save(
-                f"{out_path}/bc_params_3d_{period}_lev_{level}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
-                full_param_array_corrected,
+            # np.save(
+            #     f"{out_path}/bc_params_3d_{period}_lev_{level}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
+            #     full_param_array_corrected,
+            # )
+            # Merge all tile bc_params NetCDF files into a single xarray Dataset for the whole domain.
+            # This uses xarray's open_mfdataset which combines datasets by matching coordinate values.
+            ds_full_params = xr.open_mfdataset(all_bc_params, combine="by_coords")
+
+            # If for any reason duplicate lat or lon values exist, remove duplicates.
+            # xarray's merge usually handles non-overlapping coordinates, but if needed:
+            ds_full_params = ds_full_params.drop_duplicates("lat").drop_duplicates(
+                "lon"
             )
+
+            # Save the merged full-domain bias-correction parameters as a single NetCDF file.
+            full_params_output = f"{out_path}/bc_params_3d_{period}_lev_{level}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.nc"
+            ds_full_params.to_netcdf(full_params_output)
+            print("Saved full domain bc_params to", full_params_output)
 
             if config.save_bc_output:
                 full_bc_corrected.load().to_netcdf(
                     f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period}_{cinfor}_{sinfor}_{startyear_h}_{endyear_h}.nc"
                 )
 
-            del full_bc_corrected, full_param_array_corrected
+            del full_bc_corrected, ds_full_params
 
         if config.bc_future:
 
             for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
                 # try:
-                # if config.bc_hist == False:
-                #     for var_name, file_paths in file_paths_by_variable_obs.items():
-                #         temp_netcdf = preprocess_and_save_obs(
-                #             tile,
-                #             file_paths,
-                #             temp_dir,
-                #             var_name,
-                #             level,
-                #             lat_min,
-                #             lat_max,
-                #             lon_min,
-                #             lon_max,
-                #             startyear_h,
-                #             endyear_h,
-                #         )
+                # test
+                for var_name, file_paths in file_paths_by_variable_obs_f.items():
+                    temp_netcdf = preprocess_and_save_obs(
+                        domain,
+                        file_paths,
+                        temp_dir,
+                        var_name,
+                        level,
+                        startyear_f,
+                        endyear_f,
+                    )
                 # Define output file paths
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_{period_f}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
                 lat_range = (tile["lat_min"], tile["lat_max"])
@@ -660,8 +740,8 @@ def main(config):
             )
 
         # Remove the temporary directory and its contents
-        shutil.rmtree(temp_dir)
-        print("Intermediate files deleted.")
+        # shutil.rmtree(temp_dir)
+        # print("Intermediate files deleted.")
 
         # Log the time taken for this level
         end_time = time.time()
