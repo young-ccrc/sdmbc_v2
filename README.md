@@ -129,7 +129,7 @@ If you use SDMBCv2 for your research, please cite:
 
 > Kim, Y. (2023). * Can sub-daily multivariate bias correction of regional climate model boundary conditions improve simulation of the diurnal precipitation cycle? Geophysical Research Letters, 50, e2023GL104442. https://doi.org/10.1029/2023GL104442 *.
 
-> [SDMBCv2 Documentation](https://young-k.notion.site/SDMBCv2-486ef6f8c22e4c33ab696a2eaec06b9c?pvs=4)
+> [SDMBCv2 Documentation](https://young-k.notion.site/SDMBCv2-48a0670426514461a778848322178882?pvs=4)
 
 ---
 
