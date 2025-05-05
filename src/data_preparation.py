@@ -41,6 +41,7 @@ import math
 import re
 
 import dask  # type: ignore
+
 # import dask.array as da  # type: ignore
 import numpy as np  # arrays and matrix math # type: ignore
 import pandas as pd  # type: ignore
@@ -994,13 +995,13 @@ def expand_config_bounds_from_data(lat_min, lat_max, lon_min, lon_max, sample_fi
     # Compute grid spacing
     lat_step = np.abs(sample_data.lat[1].values - sample_data.lat[0].values)
     lon_step = np.abs(sample_data.lon[1].values - sample_data.lon[0].values)
-    
+
     # Expand the domain before loading full dataset
     latmin = lat_min - lat_step
     latmax = lat_max + lat_step
     lonmin = lon_min - lon_step
     lonmax = lon_max + lon_step
-    sample_data = sample_data.sel(lat = slice(latmin, latmax), lon = slice(lonmin, lonmax))
+    sample_data = sample_data.sel(lat=slice(latmin, latmax), lon=slice(lonmin, lonmax))
     lat_size, lon_size = sample_data.sizes["lat"], sample_data.sizes["lon"]
     lat_values = sample_data.lat.values
     lon_values = sample_data.lon.values
@@ -1077,11 +1078,19 @@ def split_domain(n_lat_tiles, n_lon_tiles, lat_values, lon_values):
             lat_min_idx, lat_max_idx = lat_indices[i], lat_indices[i + 1]
             lon_min_idx, lon_max_idx = lon_indices[j], lon_indices[j + 1]
 
-            lat_min = lat_values[lat_min_idx] - (dy / 2 if i >= 0 else 0)  # Expand bottom edge
-            lat_max = lat_values[lat_max_idx - 1] + (dy / 2 if i <= n_lat_tiles - 1 else 0)  # Expand top edge
-            
-            lon_min = lon_values[lon_min_idx] - (dx / 2 if j >= 0 else 0)  # Expand left edge
-            lon_max = lon_values[lon_max_idx - 1] + (dx / 2 if j <= n_lon_tiles - 1 else 0)  # Expand right edge
+            lat_min = lat_values[lat_min_idx] - (
+                dy / 2 if i >= 0 else 0
+            )  # Expand bottom edge
+            lat_max = lat_values[lat_max_idx - 1] + (
+                dy / 2 if i <= n_lat_tiles - 1 else 0
+            )  # Expand top edge
+
+            lon_min = lon_values[lon_min_idx] - (
+                dx / 2 if j >= 0 else 0
+            )  # Expand left edge
+            lon_max = lon_values[lon_max_idx - 1] + (
+                dx / 2 if j <= n_lon_tiles - 1 else 0
+            )  # Expand right edge
             tiles.append(
                 {
                     "lat_min_idx": lat_min_idx,
@@ -1178,7 +1187,14 @@ def generate_file_paths_future(variable, start_year, end_year, data_type):
                 file_paths.extend(glob.glob(prev_dec_path))
 
     elif config.bc_boundary == "surface":
-        file_path_pattern_gcm = f"{config.obs_path}/{variable}_*_remapped.nc"
+        file_paths = glob.glob(
+            f"{config.obs_path}/{variable}_{config.infor}_{config.gname}_*_{config.cinfor}_{config.sinfor}_*_remapped.nc"
+        )
+        if config.bc_future:
+            file_paths += glob.glob(
+                f"{config.obs_path}/{data_type}/{variable}_{config.infor}_{config.gname}_*_{config.cinfor}_{config.sinfor}_*_remapped.nc"
+            )
+        return sorted(file_paths)  # Early return to avoid double globbing
 
     else:
         raise ValueError(f"Unsupported data_type: {data_type}")

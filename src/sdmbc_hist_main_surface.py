@@ -41,8 +41,8 @@ from dask.distributed import Client  # type: ignore
 from tqdm import tqdm  # type: ignore
 
 # import yaml  # type: ignore
-from bc_grid_function import (  # type: ignore
-    bc_correction_grid_cell_future_dask_2d,
+from bc_grid_function import apply_boundary_correction  # type: ignore
+from bc_grid_function import (
     bc_correction_grid_cell_future_multiprocess,
     bc_correction_grid_cell_hist_dask_2d,
     convert_bc_params_to_xarray,
@@ -51,7 +51,9 @@ from config import config  # type: ignore
 
 # from data_preparation import   # type: ignore
 from data_preparation import (
-    determine_tiles,
+    assign_w_6hr,
+    convert_to_daily_with_fraction,
+    daily_to_6hourly_xr,
     extract_and_reshape_delayed,
     generate_file_paths,
     generate_file_paths_obs,
@@ -367,7 +369,7 @@ def main(config):
 
                 # Save each tile's bias-corrected output immediately to disk
                 output_file = f"{temp_dir}/bc_corrected_tile_2d_{idx}_{lat_range[0]}_{lat_range[1]}_{lon_range[0]}_{lon_range[1]}.nc"
-                output_params = f"{temp_dir}/bc_params_tile_3d_{idx}_{lat_range[0]}_{lat_range[1]}_{lon_range[0]}_{lon_range[1]}.nc"
+                output_params = f"{temp_dir}/bc_params_tile_2d_{idx}_{lat_range[0]}_{lat_range[1]}_{lon_range[0]}_{lon_range[1]}.nc"
                 # Save the bias-corrected data for the tile
                 if not os.path.exists(output_file):
                     print(f"Saving 2D bias-corrected for tile {idx} to {output_file}")
@@ -392,7 +394,7 @@ def main(config):
                     print(f"File {output_params} already exists. Skipping...")
 
                 # Accumulate bc_params_tile for later concatenation
-                all_bc_params.append(bc_params_tile)
+                all_bc_params.append(output_params)
 
                 # Free memory after saving each tile
                 del bc_corrected_gcm_hist_tile, ds_params
@@ -402,23 +404,23 @@ def main(config):
                 print(f"Error processing tile {idx}: {e}")
                 continue
 
-        # Concatenate all bc_params along the latitude and longitude
-        # Initialize an empty list to hold rows of tiles for each latitude band
-        lat_band_tiles = []
+        # # Concatenate all bc_params along the latitude and longitude
+        # # Initialize an empty list to hold rows of tiles for each latitude band
+        # lat_band_tiles = []
 
-        # Step 2: Iterate over the tiles and organize by rows
-        for i in range(0, len(all_bc_params), n_lon_tiles):
-            # Extract a row of tiles (all tiles in the same latitude band)
-            row_tiles = all_bc_params[i : i + n_lon_tiles]
+        # # Step 2: Iterate over the tiles and organize by rows
+        # for i in range(0, len(all_bc_params), n_lon_tiles):
+        #     # Extract a row of tiles (all tiles in the same latitude band)
+        #     row_tiles = all_bc_params[i : i + n_lon_tiles]
 
-            # Concatenate the row of tiles along the longitude (axis=1)
-            lat_band = np.concatenate(row_tiles, axis=1)
+        #     # Concatenate the row of tiles along the longitude (axis=1)
+        #     lat_band = np.concatenate(row_tiles, axis=1)
 
-            # Add the concatenated latitude band to the list
-            lat_band_tiles.append(lat_band)
+        #     # Add the concatenated latitude band to the list
+        #     lat_band_tiles.append(lat_band)
 
-        # Concatenate all latitude bands along the latitude (axis=0)
-        full_param_array = np.concatenate(lat_band_tiles, axis=0)
+        # # Concatenate all latitude bands along the latitude (axis=0)
+        # full_param_array = np.concatenate(lat_band_tiles, axis=0)
 
         # Load the bias-corrected tiles and combine them into a single dataset
         tile_files = [
@@ -605,11 +607,13 @@ def main(config):
             level,
             startyear_f,
             endyear_f,
-            data_type="validation_gcm",
+            data_type=config.period_f,
         )
-
+        sliced_gcm = sliced_gcm_future.sel(
+            time=slice(f"{config.startyear_f}-01-01", f"{config.endyear_f}-12-31")
+        )
         reshaped_gcm_delayed_f = extract_and_reshape_delayed(
-            sliced_gcm_future, 1, startyear_f, endyear_f, bc_boundary
+            sliced_gcm, 1, startyear_f, endyear_f, bc_boundary
         )
         reshaped_gcm_delayed_f += 273.15
 
@@ -699,7 +703,7 @@ def main(config):
 
         # Concatenate all bc_params along the latitude and longitude
         # Initialize an empty list to hold rows of tiles for each latitude band
-        lat_band_tiles = []
+        # lat_band_tiles = []
 
         # Load the bias-corrected tiles and combine them into a single dataset
         # tile_files = [

@@ -1735,7 +1735,7 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                         print("Correcting for annual corrl", jj)
 
                     avy, sdy, cory = mbc.avsdy(ggy)
-                    if np.min(sdyh) < 0.01:
+                    if np.min(sdyh) < 0.01 and config.bc_boundary == "lateral":
                         # print(
                         #     "Exit annual corrl itr as obs std is lower then 1, calibration, jj",
                         #     itr,
@@ -2716,7 +2716,10 @@ def bc_correction_future(gcm_reshape, bc_params):
                         print("Correcting for annual corrl", jj)
 
                     avy, sdy, _ = mbc.avsdy(ggy)
-                    if np.min(bc_params.sdyh) < 0.01:
+                    if (
+                        np.min(bc_params.sdyh) < 0.01
+                        and config.bc_boundary == "lateral"
+                    ):
                         # print(
                         #     "Exit annual corrl itr as obs std is lower then 1, validation, jj",
                         #     itr,
