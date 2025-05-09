@@ -1195,8 +1195,9 @@ def bc_correction_grid_cell_multiprocess(gcm, obs, variable):
         results = pool.map(correction_wrapper_pool, args_list)
 
     # Convert results back to xarray.Dataset
+    year = config.endyear_h - config.startyear_h + 1
     corrected_data = {
-        var: np.empty((31, 12, 31, len(lat_values), len(lon_values)))
+        var: np.empty((year, 12, 31, len(lat_values), len(lon_values)))
         for var in variable
     }
     bc_params_array = np.empty((len(gcm.lat), len(gcm.lon)), dtype=object)

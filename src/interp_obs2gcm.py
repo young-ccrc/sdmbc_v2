@@ -1212,14 +1212,19 @@ def regrid_and_interpolate(
             lat=slice(config["lat_min"], config["lat_max"]),
             lon=slice(config["lon_min"], config["lon_max"]),
         ).chunk({"lev": -1})
+        sliced_target_ds = target_ds.sel(
+            lat=slice(config["lat_min"], config["lat_max"]),
+            lon=slice(config["lon_min"], config["lon_max"]),
+        ).chunk({"lev": -1})
         # print('sliced_do[target_var]', sliced_do[target_var])
         # print('Z_era5_per', Z_era5_per)
         # print('sliced_gcm_z_data_interp', sliced_gcm_z_data_interp)
+
         interpolated_ds = vertical_interpolation(
             sliced_do[target_var],
             Z_era5_per,
             sliced_gcm_z_data_interp,
-            target_ds[target_var],
+            sliced_target_ds[target_var],
             sliced_gcm_z_data_interp,
         )
     else:
@@ -1227,21 +1232,22 @@ def regrid_and_interpolate(
             lat=slice(config["lat_min"], config["lat_max"]),
             lon=slice(config["lon_min"], config["lon_max"]),
         ).chunk({"lev": -1})
+        sliced_target_ds = target_ds.sel(
+            lat=slice(config["lat_min"], config["lat_max"]),
+            lon=slice(config["lon_min"], config["lon_max"]),
+        ).chunk({"lev": -1})
+
         interpolated_ds = vertical_interpolation(
             sliced_do[target_var],
             Z_era5_per,
             sliced_target_zfull,
-            target_ds[target_var],
+            sliced_target_ds[target_var],
             sliced_target_zfull,
         )
 
     interpolated_ds = interpolated_ds.transpose("time", "lev", "lat", "lon").chunk(
         {"lev": -1}
     )
-    sliced_target_ds = target_ds.sel(
-        lat=slice(config["lat_min"], config["lat_max"]),
-        lon=slice(config["lon_min"], config["lon_max"]),
-    ).chunk({"lev": -1})
 
     if target_var in ["ua", "va"]:
         if not interpolated_ds.lev.equals(sliced_target_ds[target_var].lev):

@@ -206,6 +206,114 @@ def extract_years_remap(filename):
     return None, None
 
 
+# def generate_file_paths(
+#     base_path,
+#     variable,
+#     infor,
+#     gname,
+#     period,
+#     cinfor,
+#     sinfor,
+#     version,
+#     start_year,
+#     end_year,
+# ):
+#     """
+#     Generate file paths for given parameters within a specified year range.
+
+#     Args:
+#         base_path (str): Base directory path.
+#         variable (str): Variable name.
+#         infor, gname, period, cinfor, sinfor, version (str): Metadata strings.
+#         start_year (int): Start year.
+#         end_year (int): End year.
+
+#     Returns:
+#         list: List of generated file paths.
+#     """
+
+#     file_paths = []
+#     if config.bc_boundary == "lateral":
+#         for year in range(start_year, end_year + 1):
+#             # For models that start in January at 06:00 and require the previous December
+#             if gname in ["ACCESS-ESM1-5"]:
+#                 if year == start_year:
+#                     # Include December of the year before start_year if focusing on a period starting from 1982 or later
+#                     prev_dec_path = (
+#                         f"{base_path}/{variable}/{sinfor}/v{version}/"
+#                         f"{variable}_{infor}_{gname}_*_{cinfor}_{sinfor}_{year-1}*.nc"
+#                     )
+#                     file_paths.extend(glob.glob(prev_dec_path))
+
+#             # Pattern for the main year of interest, adjusted to include the broadest possible match
+#             file_path_pattern = (
+#                 f"{base_path}/{variable}/{sinfor}/v{version}/"
+#                 f"{variable}_{infor}_{gname}_*_{cinfor}_{sinfor}_{year}*.nc"
+#             )
+#             matching_file_paths = glob.glob(file_path_pattern)
+#             file_paths.extend(matching_file_paths)
+#     else:
+#         file_path_pattern = glob.glob(f"{base_path}/{variable}_*_remapped.nc")
+#         # Filter files that overlap with the desired year range
+#         filtered_files = [
+#             f
+#             for f in file_path_pattern
+#             if is_within_period(*extract_years_remap(f), start_year, end_year)
+#         ]
+
+#         file_paths.extend(filtered_files)
+
+#     return file_paths
+
+
+def parse_start_hour_from_filename(fname):
+    match = re.search(r"_(\d{10})-(\d{10})\.nc$", fname)
+    if not match:
+        return None
+    start_str = match.group(1)
+    return int(start_str[8:10])  # hh from yyyymmddhhmm
+
+
+def covers_december(file_path, year_minus_1):
+    match = re.search(r"_(\d{10})-(\d{10})\.nc$", file_path)
+    if not match:
+        return False
+    start_str, end_str = match.groups()
+    start_date = pd.to_datetime(start_str, format="%Y%m%d%H%M")
+    end_date = pd.to_datetime(end_str, format="%Y%m%d%H%M")
+    return start_date.year <= year_minus_1 and end_date >= pd.Timestamp(
+        f"{year_minus_1}-12-01"
+    )
+
+
+def is_shifted_gcm(file_list):
+    """Return True if GCM uses shifted hours like 03/09/15/21 (not 00/06/12/18)."""
+    for f in file_list:
+        try:
+            ds = xr.open_dataset(f, decode_times=True)
+            hours = sorted(set(ds.time.dt.hour.values))
+            ds.close()
+            return set(hours).issubset({3, 9, 15, 21})  # common in NorESM2-MM
+        except Exception:
+            continue
+    return False  # default: not shifted
+
+
+def needs_prev_december(file_list, target_year):
+    """
+    Return True if model follows 00/06/12/18 and first file lacks 00:00.
+    """
+    if is_shifted_gcm(file_list):
+        return False  # shift-based GCMs like NorESM2-MM don't need Dec files
+
+    for f in file_list:
+        if str(target_year) in f:
+            hour = parse_start_hour_from_filename(f)
+            if hour == 0:
+                return False  # starts at 00:00
+    return True
+
+
 def generate_file_paths(
     base_path,
     variable,
@@ -219,51 +327,45 @@ def generate_file_paths(
     end_year,
 ):
     """
-    Generate file paths for given parameters within a specified year range.
+    Generate CMIP6 GCM input file paths and optionally include the previous year's
+    December file if needed (for 00-based GCMs only).
 
-    Args:
-        base_path (str): Base directory path.
-        variable (str): Variable name.
-        infor, gname, period, cinfor, sinfor, version (str): Metadata strings.
-        start_year (int): Start year.
-        end_year (int): End year.
-
-    Returns:
-        list: List of generated file paths.
+    Only models that operate on the 00/06/12/18 UTC cycle are considered.
     """
 
     file_paths = []
+
     if config.bc_boundary == "lateral":
         for year in range(start_year, end_year + 1):
-            # For models that start in January at 06:00 and require the previous December
-            if gname in ["ACCESS-ESM1-5"]:
-                if year == start_year:
-                    # Include December of the year before start_year if focusing on a period starting from 1982 or later
-                    prev_dec_path = (
-                        f"{base_path}/{variable}/{sinfor}/v{version}/"
-                        f"{variable}_{infor}_{gname}_*_{cinfor}_{sinfor}_{year-1}*.nc"
-                    )
-                    file_paths.extend(glob.glob(prev_dec_path))
-
-            # Pattern for the main year of interest, adjusted to include the broadest possible match
-            file_path_pattern = (
+            year_pattern = (
                 f"{base_path}/{variable}/{sinfor}/v{version}/"
                 f"{variable}_{infor}_{gname}_*_{cinfor}_{sinfor}_{year}*.nc"
             )
-            matching_file_paths = glob.glob(file_path_pattern)
-            file_paths.extend(matching_file_paths)
+            this_year_files = sorted(glob.glob(year_pattern))
+
+            if year == start_year and needs_prev_december(this_year_files, year):
+                prev_year_pattern = (
+                    f"{base_path}/{variable}/{sinfor}/v{version}/"
+                    f"{variable}_{infor}_{gname}_*_{cinfor}_{sinfor}_{year-1}*.nc"
+                )
+                prev_year_files = glob.glob(prev_year_pattern)
+                december_files = [
+                    f for f in prev_year_files if covers_december(f, year - 1)
+                ]
+                file_paths.extend(december_files)
+
+            file_paths.extend(this_year_files)
+
     else:
         file_path_pattern = glob.glob(f"{base_path}/{variable}_*_remapped.nc")
-        # Filter files that overlap with the desired year range
         filtered_files = [
             f
             for f in file_path_pattern
             if is_within_period(*extract_years_remap(f), start_year, end_year)
         ]
-
         file_paths.extend(filtered_files)
 
-    return file_paths
+    return sorted(file_paths)
 
 
 def generate_file_paths_obs(
@@ -870,7 +972,9 @@ def align_daily_data_xr(daily_data_xr, start_year):
     flattened_data = flattened_data.assign_coords(time=time_index).reset_coords(
         drop=True
     )
-
+    # flattened_data = flattened_data.assign_coords('time', time_index).reset_coords(
+    #     drop=True
+    # )
     # Align the flattened data with the valid dates
     aligned_data_xr = flattened_data.sel(time=valid_days)
 
@@ -926,6 +1030,8 @@ def convert_6hr_to_original_xr(bias_corrected_data_xr, g_u_xr, g_v_xr):
     xarray Dataset
         The 6-hourly data in its original form (with bcu and bcv added as variables)
     """
+    bias_corrected_data_xr = bias_corrected_data_xr.squeeze()
+
     # Pre-chunk the input datasets to optimize computation
     bias_corrected_data_xr = bias_corrected_data_xr.transpose(
         "time", "lat", "lon"

@@ -239,10 +239,10 @@ def main(config):
         )
         for var in variables
     }
-    obs_path_f = "/g/data/w28/yk8692/input/era5/validation"
+    # obs_path_f = "/g/data/w28/yk8692/input/era5/validation"
     file_paths_by_variable_obs_f = {
         var: (
-            generate_file_paths_obs(obs_path_f, var, gname, startyear_f, endyear_f)
+            generate_file_paths_obs(obs_path, var, gname, startyear_f, endyear_f)
             if config.input_model == "reanalysis"
             else generate_file_paths(
                 bc_hist_path,
@@ -329,7 +329,7 @@ def main(config):
             # Construct the path to the preprocessed file for this variable
             obs_file = os.path.join(
                 temp_dir,
-                f"preprocessed_obs_{var_name}_lev_{level}_{domain[0]['lat_min']}_{domain[0]['lat_max']}_{domain[0]['lon_min']}_{domain[0]['lon_max']}.nc",
+                f"preprocessed_obs_{var_name}_lev_{level}_{tile[0]['lat_min']}_{tile[0]['lat_max']}_{tile[0]['lon_min']}_{tile[0]['lon_max']}_{startyear_h}_{endyear_h}.nc",
             )
             sliced_obs[var_name] = xr.open_dataset(obs_file)[
                 var_name
