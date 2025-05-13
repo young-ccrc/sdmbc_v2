@@ -999,9 +999,9 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
     gcmc = gcm_reshape.copy()
     # gcmf = gcm_reshape.copy()
 
-    gm = np.zeros((nvar, 31, 12))
-    gs = np.zeros((nvar, 31, nss))
-    gy = np.zeros((nvar, 31))
+    gm = np.zeros((nvar, ngcur, 12))
+    gs = np.zeros((nvar, ngcur, nss))
+    gy = np.zeros((nvar, ngcur))
 
     # Account for days in February in leap years
     days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
