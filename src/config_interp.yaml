@@ -23,14 +23,6 @@
 # - sinfor: GCM spatial information (e.g., "gr")
 # - version: Version of the GCM data (e.g., "v20180917")
 
-# Input GCM information (only needed if GCM is used as obs instead of reanalysis):
-# - input_infor: 6-hourly full level data
-# - input_gname: Name of the GCM (e.g., "CNRM-CM6-1")
-# - input_period: Period of the GCM data (e.g., "historical")
-# - input_cinfor: GCM configuration information (e.g., "r1i1p1f2")
-# - input_sinfor: GCM spatial information (e.g., "gr")
-# - input_version: Version of the GCM data (e.g., "v20180917")
-
 # Selected area:
 # - lat_min: Minimum latitude of the selected area
 # - lat_max: Maximum latitude of the selected area
@@ -49,14 +41,11 @@
 # =============== Input for interpolation =========================
 # File path -------------------------------------------------
 input_path: "/g/data/rt52/era5/pressure-levels/reanalysis" # "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2" if # gcm /g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r1i1p1f1
-# target_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2"
-# target_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r1i1p1f1"
 target_path: "/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp370/r6i1p1f1"
 
 input_path_sst: "/g/data/rt52/era5/single-levels/reanalysis"
 target_path_sst: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r1i1p1f1"
 
-# target_g_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2/6hrPlevPt/zg/gr/v20180917" # if geopotential height of GCM exist
 target_g_path: None
 output_path: "/g/data/w28/yk8692/input/era5/validation" # /g/data/w28/yk8692/era5/sdmbc_v2
 input_z_path: "/g/data/rt52/era5/pressure-levels/reanalysis/z"
@@ -66,19 +55,6 @@ input_model: "reanalysis"
 target_model: "gcm"
 
 # Target GCM informatin -------------------------------------------
-# infor: "6hrLev"
-# gname: "CNRM-CM6-1"
-# period: "historical"
-# cinfor: "r1i1p1f2"
-# sinfor: "gr"
-# version: "v20180917"
-# infor: "6hrLev"
-# gname: "ACCESS-ESM1-5"
-# period: "historical"
-# cinfor: "r1i1p1f1"
-# sinfor: "gn"
-# version: "v20191115"
-
 infor: "6hrLev"
 gname: "ACCESS-ESM1-5"
 period: "ssp370"
