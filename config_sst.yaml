@@ -1,0 +1,70 @@
+# ================= Bias Correction Configuration =================
+# This configuration file is used for setting up the bias correction script.
+# It contains paths, simulation settings, bias correction parameters, and options.
+
+# ================= Input Paths =================
+# Paths to input data and output directories
+bc_hist_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1/Oday" # Historical bias correction data path
+bc_future_path: "/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp370/r6i1p1f1/Oday" #
+obs_path: "/g/data/w28/yk8692/input/era5" # Path to ERA5 observation data
+obs_future_path: "/g/data/w28/yk8692/input/era5/validation" # Path to ERA5 observation data
+out_path: "/g/data/w28/yk8692/sdmbc_v2/tests/validation" # Directory to save bias-corrected output
+out_figure_path: "/g/data/w28/yk8692/sdmbc_v2/tests/validation" # Directory to save figures
+
+# ================= Simulation Periods =================
+# Historical simulation settings
+bc_hist: True # Enable historical simulation (True: Yes, False: No)
+startyear_h: 1959 # Start year for historical simulation
+endyear_h: 1989 # End year for historical simulation
+
+# Future simulation settings
+bc_future: True # Enable future simulation (True: Yes, False: No)
+startyear_f: 1990 # Start year for future simulation
+endyear_f: 2020 # End year for future simulation
+
+# ================= GCM (Global Climate Model) Information =================
+# Historical data settings
+infor: "Oday" # Data frequency (6hrLev: 3D data, Oday: 2D data)
+gname: "ACCESS-ESM1-5" # Model name
+period: "historical" # Simulation period (historical, validation, or future)
+cinfor: "r6i1p1f1" # Configuration information
+sinfor: "gn" # Spatial resolution
+version: "20200529" # Dataset version
+
+# Future data settings
+scenario: "ssp370" # Climate scenario for future simulation (e.g., ssp126, ssp370)
+cinfor_f: "r6i1p1f1" # Configuration for future simulation
+version_f: "20200908" # Dataset version for future simulation
+period_f: "validation" # Simulation period for future data (historical, validation, or future)
+
+# ================= Bias Correction Settings =================
+bc_boundary: "surface" # Boundary type (surface: 2D, lateral: 3D)
+input_model: "reanalysis" # Input model type (reanalysis: ERA5, model: CMIP6)
+target_variable: ["tos"] # ["hus", "ta", "ua", "va"] # Variables to correct (e.g., "tos" for 2D; "hus", "ta", "ua", "va" for 3D)
+slevel: 0 # Starting level for bias correction, 0 for the first level (2D)
+elevel: 0 # Ending level for bias correction, 0 for the first level (2D)
+no_of_variables: 1 # Number of variables for bias correction (1 for 2D, 3 for 3D)
+no_of_iterations: 1 # Number of bias correction iterations
+correction_model: 4 # Correction method (1: mean, 2: variance, 3: nested, 4: multivariate)
+sub_daily_correction: False # Enable sub-daily bias correction (True: Yes, False: No)
+
+# ================= Spatial Selection =================
+# Latitude and longitude range for the selected area
+lat_min: -90 # Minimum latitude
+lat_max: 90 # Maximum latitude
+lon_min: 0 # Minimum longitude
+lon_max: 360 # Maximum longitude
+
+# ================= Physical Limits =================
+# Upper and lower physical limits for variables (wind speed (m/s), temperature (K), specific humidity (g/kg), sea surface temperature (K))
+upper_limit: [190, 330, 100, 330] # Upper limits for variables
+lower_limit: [0.0001, 150, 0.0001, 270] # Lower limits for variables
+
+# ================= Options =================
+save_bc_output: True # Save bias-corrected output (True: Yes, False: Save factors only)
+reformat_to_original: False # Reformat output to original format (True: Yes, False: No)
+
+# ================= Usage =================
+# Edit the above parameters as needed. Save the file and pass its path to the script as follows:
+# python sdmbc_hist_main.py --config /path/to/config.yaml
+# Ensure all file paths and variable names are correct. Refer to documentation for further details.
