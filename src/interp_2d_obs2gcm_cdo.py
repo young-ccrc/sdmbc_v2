@@ -171,9 +171,10 @@ def main(config):
     sinfor = config["sinfor"]
     version = config["version"]
     gname = config["gname"]
-    input_gname = config["input_gname"]
-    input_sinfor = config["input_sinfor"]
-    input_version = config["input_version"]
+    if input_model != "reanalysis":
+        input_gname = config["input_gname"]
+        input_sinfor = config["input_sinfor"]
+        input_version = config["input_version"]
     target_2d = config["var_interp"]
 
     if input_model == "reanalysis":
