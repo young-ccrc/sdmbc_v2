@@ -3,7 +3,7 @@
 #PBS -m ae
 #PBS -P n81
 #PBS -q normal
-#PBS -l walltime=12:00:00
+#PBS -l walltime=24:00:00
 #PBS -l mem=190GB
 #PBS -l ncpus=48
 #PBS -j oe
@@ -18,7 +18,7 @@ module load conda/analysis3-24.01
 
 echo "Starting interpolation"
 
-python interp_obs2gcm.py --yp /scratch/dm6/yk8692/interpolation/config_interp.yaml --var ta
+python interp_obs2gcm.py --yp /g/data/w28/yk8692/sdmbc_v2/src/config_interp.yaml --var ta
 
 echo "Ending time:"
 date
