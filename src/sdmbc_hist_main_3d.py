@@ -8,7 +8,7 @@ import time  # Import the time module
 import warnings
 from types import SimpleNamespace
 
-# import dask  # type: ignore
+import dask  # type: ignore
 import numpy as np  # type: ignore
 
 # import pandas as pd # type: ignore
@@ -16,7 +16,8 @@ import xarray as xr  # type: ignore
 from dask.distributed import Client  # type: ignore
 from tqdm import tqdm  # type: ignore
 
-# import yaml  # type: ignore
+import yaml  # type: ignore
+
 # from bc_grid_function import load_preprocess_variable  # type: ignore
 from bc_grid_function import (
     convert_bc_params_to_xarray,
@@ -25,7 +26,7 @@ from bc_grid_function import (
     process_tile,
     process_tile_future,
 )
-from config import config  # type: ignore
+from config import Config  # type: ignore
 
 # from data_preparation import   # type: ignore
 from data_preparation import (
@@ -103,6 +104,9 @@ def parse_arguments():
     parser.add_argument("--sy", type=int, default=1982, help="Start year.")
     parser.add_argument("--ey", type=int, default=2012, help="End year.")
 
+    parser.add_argument("--ncpus", type=int, default=None)
+    parser.add_argument("--mem", type=int, default=None)
+
     return parser.parse_args()
 
 
@@ -158,13 +162,36 @@ def dict_to_simplenamespace(d):
     return SimpleNamespace(**d)
 
 
-def main(config):
+def main(config_path, override_ncpus=None, override_mem=None):
 
-    setup_client()
+    # setup_client()
+
+    # Load YAML config
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+        config = SimpleNamespace(**config_dict)
+
+    # Extract resources from config
+    ncpus = getattr(config, "resources", {}).get("ncpus", 4)
+    mem_gb = getattr(config, "resources", {}).get("mem_gb", 16)
+
+    # Override from command-line if provided
+    if override_ncpus:
+        ncpus = override_ncpus
+    if override_mem:
+        mem_gb = override_mem
+
+    # Dask performance settings
+    dask.config.set(
+        {"array.slicing.split_large_chunks": True, "array.chunk-size": "50MiB"}
+    )
+
+    # Start Dask client
+    client = setup_client(ncpus, mem_gb)
+    print("Dask client started with resources:", ncpus, "CPUs and", mem_gb, "GB memory")
 
     startyear_h = config.startyear_h
     endyear_h = config.endyear_h
-    startyear_h = config.startyear_h
     bc_boundary = config.bc_boundary
     bc_hist_path = config.bc_hist_path
     lat_max = config.lat_max
@@ -202,6 +229,7 @@ def main(config):
     # Generate file paths for each variable
     file_paths_by_variable_gcm = {
         var: generate_file_paths(
+            config,
             bc_hist_path,
             var,
             infor,
@@ -225,6 +253,7 @@ def main(config):
             generate_file_paths_obs(obs_path, var, gname, startyear_h, endyear_h)
             if config.input_model == "reanalysis"
             else generate_file_paths(
+                config,
                 bc_hist_path,
                 var,
                 infor,
@@ -240,28 +269,32 @@ def main(config):
         for var in variables
     }
     # obs_path_f = "/g/data/w28/yk8692/input/era5/validation"
-    file_paths_by_variable_obs_f = {
-        var: (
-            generate_file_paths_obs(obs_path, var, gname, startyear_f, endyear_f)
-            if config.input_model == "reanalysis"
-            else generate_file_paths(
-                bc_hist_path,
-                var,
-                infor,
-                gname,
-                period,
-                cinfor,
-                sinfor,
-                version,
-                startyear_f,
-                endyear_f,
+    if config.bc_future:
+        file_paths_by_variable_obs_f = {
+            var: (
+                generate_file_paths_obs(obs_path, var, gname, startyear_f, endyear_f)
+                if config.input_model == "reanalysis"
+                else generate_file_paths(
+                    config,
+                    bc_hist_path,
+                    var,
+                    infor,
+                    gname,
+                    period,
+                    cinfor,
+                    sinfor,
+                    version,
+                    startyear_f,
+                    endyear_f,
+                )
             )
-        )
-        for var in variables
-    }
+            for var in variables
+        }
 
     # =============== Load obs end ===============
     # Dynamically determine number of tiles
+    if not file_paths_by_variable_obs[variables[0]]:
+        raise ValueError(f"No observation files found for variable: {variables[0]}")
 
     lat_min, lat_max, lon_min, lon_max, lat_size, lon_size, lat_values, lon_values = (
         expand_config_bounds_from_data(
@@ -302,6 +335,7 @@ def main(config):
         os.makedirs(temp_dir, exist_ok=True)
         # ------------------ Load GCM Data ------------------
         temp_gcm = preprocess_and_save_gcm(
+            config,
             domain,
             file_paths_by_variable_gcm,
             temp_dir,
@@ -377,6 +411,7 @@ def main(config):
                 # Process the tile if either output is missing
                 print(f"Processing tile {idx}, level {level}...")
                 bc_corrected_gcm_hist_tile, bc_params_tile = process_tile(
+                    config,
                     gcm_tile,
                     obs_tile,
                     config,
@@ -613,6 +648,7 @@ def main(config):
                         lat=slice(*lat_range), lon=slice(*lon_range)
                     )
                     bc_corrected_gcm_future_tile = process_tile_future(
+                        config,
                         tile,
                         variables,
                         level,
@@ -766,5 +802,17 @@ def main(config):
 
 
 if __name__ == "__main__":
-    main(config)
+    # args = parse_arguments()
+    # cfg = Config(path=args.config)
+    # main(cfg)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--yp", required=True, help="Path to YAML config")
+    parser.add_argument(
+        "--ncpus", type=int, default=None, help="Override number of CPUs"
+    )
+    parser.add_argument("--mem", type=int, default=None, help="Override memory in GB")
+
+    args = parser.parse_args()
+    main(args.yp, args.ncpus, args.mem)
+
     print("All done!")

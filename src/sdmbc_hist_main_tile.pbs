@@ -19,8 +19,7 @@ module load conda/analysis3-24.04
 
 echo "Starting bias correction"
 
-python sdmbc_hist_main_3d.py
-
+python sdmbc_hist_main_3d.py --yp /g/data/w28/yk8692/sdmbc_v2/config_3d_cnrm_test.yaml --ncpus 48 --mem 192
 
 echo "Ending time:"
 date

@@ -44,7 +44,7 @@ import xarray as xr  # type: ignore
 # from mrmbc import constants as cons  # type: ignore
 from mrmbc import mbc_subroutines as mbc  # type: ignore
 
-from config import config
+# from config import config
 
 # import yaml  # type: ignore
 from data_preparation import is_leap_year
@@ -54,18 +54,17 @@ from data_preparation import is_leap_year
 # Ignore a specific category of warning
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-
-correction_model = config.correction_model
-startyear_h = config.startyear_h
-endyear_h = config.endyear_h
-lower_limit = config.lower_limit
-no_of_iterations = config.no_of_iterations
-no_of_variables = config.no_of_variables
-startyear_h = config.startyear_h
-upper_limit = config.upper_limit
-bc_boundary = config.bc_boundary
-startyear_f = config.startyear_f
-endyear_f = config.endyear_f
+# correction_model = config.correction_model
+# startyear_h = config.startyear_h
+# endyear_h = config.endyear_h
+# lower_limit = config.lower_limit
+# no_of_iterations = config.no_of_iterations
+# no_of_variables = config.no_of_variables
+# startyear_h = config.startyear_h
+# upper_limit = config.upper_limit
+# bc_boundary = config.bc_boundary
+# startyear_f = config.startyear_f
+# endyear_f = config.endyear_f
 time_scale = 0  # 0: daily, 1: monthly, default: 0
 missing_value = 0.00001  # missing value in the input data
 moving_window = 15  # centred moving window if input data is at daily time scale
@@ -258,7 +257,7 @@ def process_variable(obs_ds, sim_ds, time_steps):
 
 
 def quantile_mapping_rescale_all(
-    obs_ds, sim_ds, time_steps=("00:00", "06:00", "12:00", "18:00")
+    config, obs_ds, sim_ds, time_steps=("00:00", "06:00", "12:00", "18:00")
 ):
     """
     Perform quantile mapping for each 6-hourly time step and rescale daily sums to 4 for all variables.
@@ -311,7 +310,7 @@ def quantile_mapping_rescale_all(
 
 
 def quantile_mapping_rescale_future(
-    obs_hist, sim_hist, sim_future, time_steps=("00:00", "06:00", "12:00", "18:00")
+    config, obs_hist, sim_hist, sim_future, time_steps=("00:00", "06:00", "12:00", "18:00")
 ):
     """
     Apply quantile mapping corrections derived from historical data to future simulations,
@@ -787,7 +786,7 @@ class BiasCorrectionParams:
         return BiasCorrectionParams(**data)
 
 
-def bc_correction_hist(gcm_reshape, obs_reshape):
+def bc_correction_hist(config, gcm_reshape, obs_reshape):
     """
     Perform bias correction on GCM data using observational data for historical period.
 

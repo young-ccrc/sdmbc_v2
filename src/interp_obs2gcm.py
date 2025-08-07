@@ -19,6 +19,7 @@ import argparse
 import glob
 import os
 import warnings
+import gc
 
 # from multiprocessing import Pool
 from pathlib import Path
@@ -30,6 +31,7 @@ import numpy as np  # type: ignore
 import xarray as xr  # type: ignore
 import xesmf as xe  # type: ignore
 import yaml  # type: ignore
+import dask
 from dask.diagnostics import ProgressBar  # type: ignore
 from dask.distributed import Client  # type: ignore
 from scipy.interpolate import interp1d  # type: ignore
@@ -59,23 +61,25 @@ def load_config(yaml_path):
 #         self.__dict__.update(entries)
 
 
-def setup_client(n_workers=None):
+def setup_client(ncpus, mem_gb):
     """
-    Set up Dask client for parallel processing, allowing customization of workers and threads.
-
-    Args:
-        n_workers (int): Number of workers to use.
-        threads_per_worker (int): Number of threads per worker.
-
-    Returns:
-        Client: A Dask distributed client instance.
+    Dynamically set up a Dask client based on available CPUs and memory.
     """
-    if n_workers is None:
-        c = Client()
-    else:
-        c = Client(n_workers=n_workers)
-    print("Dask client setup complete.")
-    return c
+    # Set threads per worker (try to keep under 8 for memory balance)
+    threads_per_worker = min(ncpus, 8)
+    n_workers = max(1, ncpus // threads_per_worker)
+    mem_per_worker = int(mem_gb / n_workers)
+
+    print(
+        f"[INFO] Starting Dask client: {n_workers} workers × {threads_per_worker} threads"
+    )
+    print(f"[INFO] Each worker memory limit: {mem_per_worker}GB")
+
+    return Client(
+        n_workers=n_workers,
+        threads_per_worker=threads_per_worker,
+        memory_limit=f"{mem_per_worker}GB",
+    )
 
 
 def parse_arguments():
@@ -95,9 +99,13 @@ def parse_arguments():
     parser.add_argument(
         "--var",
         type=str,
+        nargs="+",
         default=["hus", "ta", "ua", "va"],
-        help="Path to the YAML configuration file.",
+        help="Variable(s) to interpolate (e.g., --var ta or --var ta hus).",
     )
+
+    parser.add_argument("--ncpus", type=int, default=None)
+    parser.add_argument("--mem", type=int, default=None)
 
     # parser.add_argument(
     #     "--sy", type=int, default=config.startyear_h, help="Start year."
@@ -768,8 +776,10 @@ def load_target_files(target_path, infor, sinfor, version, var, year):
     Returns:
         list: A sorted list of file paths matching the specified pattern.
     """
-    pattern = f"{target_path}/{infor}/{var}/g*/v*/{var}_*{year}*.nc"
-    return sorted(glob.glob(pattern))
+    pattern = f"{target_path}/{infor}/{var}/**/{var}_{infor}_*{year}*.nc"
+    print(pattern)
+    matching_files = glob.glob(pattern, recursive=True)
+    return sorted(matching_files)
 
 
 # clear
@@ -786,12 +796,15 @@ def load_datasets(year, month, files, chunks):
     Returns:
     xarray.Dataset: The filtered dataset containing data only for the specified year and month.
     """
+    # print(files)
+    if not files:
+        raise FileNotFoundError(f"No files found for year {year} and month {month}.")
     ds = xr.open_mfdataset(files, combine="by_coords", chunks=chunks)
     return ds.sel(time=(ds["time"].dt.year == year) & (ds["time"].dt.month == month))
 
 
 # clear
-def process_year_month(config, year, month):
+def process_year_month(config, year, month, selected_variables):
     """
     Processes data for a given year and month based on the provided configuration.
 
@@ -811,7 +824,9 @@ def process_year_month(config, year, month):
     Raises:
     ValueError: If no data is available for the specified year, month, and variable.
     """
-    selected_variables = [config["var_interp"]]
+    # selected_variables = [config["var_interp"]]
+    selected_variables = [selected_variables]
+    print("selected_variables", selected_variables)
     tq_variables = ["ta", "hus"]
 
     target_grids = {
@@ -857,11 +872,13 @@ def process_year_month(config, year, month):
         if tq_grids[var].sizes["time"] == 0:
             raise ValueError(f"No data available for {year}-{month} in variable {var}.")
 
-    return process_geopotential_height(config, target_grids, tq_grids, year, month)
+    return process_geopotential_height(
+        config, target_grids, tq_grids, year, month, selected_variables[0]
+    )
 
 
 # clear
-def process_geopotential_height(config, target_grids, tq_grids, year, month):
+def process_geopotential_height(config, target_grids, tq_grids, year, month, variable):
     """
     Processes the geopotential height based on the configuration and target grids.
 
@@ -876,7 +893,7 @@ def process_geopotential_height(config, target_grids, tq_grids, year, month):
     tuple: A tuple containing the processed geopotential height data, target grids, and tq grids.
     """
     if (
-        target_grids[config["var_interp"]].lev.standard_name
+        target_grids[variable].lev.standard_name
         == "atmosphere_hybrid_height_coordinate"
     ):
         target_z_files = glob.glob(
@@ -885,20 +902,21 @@ def process_geopotential_height(config, target_grids, tq_grids, year, month):
         target_zfull = (
             xr.open_dataset(
                 target_z_files[0], chunks={"lev": -1, "lat": -1, "lon": -1}
-            )["zfull"]
-            .transpose("lev", "lat", "lon")
-            .persist()
+            )["zfull"].transpose("lev", "lat", "lon")
+            # .persist()
         )
         return target_zfull, target_grids, tq_grids
     elif (
-        target_grids[config["var_interp"]].lev.standard_name
+        target_grids[variable].lev.standard_name
         == "atmosphere_hybrid_sigma_pressure_coordinate"
     ):
-        return compute_or_load_geopotential(config, target_grids, tq_grids, year, month)
+        return compute_or_load_geopotential(
+            config, target_grids, tq_grids, year, month, variable
+        )
 
 
 # clear
-def compute_or_load_geopotential(config, target_grids, tq_grids, year, month):
+def compute_or_load_geopotential(config, target_grids, tq_grids, year, month, variable):
     """
     Compute or load geopotential height for a given year and month.
 
@@ -940,7 +958,7 @@ def compute_or_load_geopotential(config, target_grids, tq_grids, year, month):
             compute_geopotential_height(target_p, target_t.ta, orog)
             .chunk({"time": 10, "lev": -1, "lat": -1, "lon": -1})
             .transpose("time", "lev", "lat", "lon")
-            .persist()
+            # .persist()
         )
     else:
         target_zg_files = [
@@ -952,10 +970,10 @@ def compute_or_load_geopotential(config, target_grids, tq_grids, year, month):
             target_zg_files, chunks={"time": 10, "lev": -1, "lat": -1, "lon": -1}
         )
         selected_target_z = target_z.sel(
-            time=(target_grids[config["var_interp"]]["time"].dt.year == year)
-            & (target_grids[config["var_interp"]]["time"].dt.month == month)
+            time=(target_grids[variable]["time"].dt.year == year)
+            & (target_grids[variable]["time"].dt.month == month)
         )
-        target_zfull = selected_target_z.rename({"z": "zfull"}).persist()
+        target_zfull = selected_target_z.rename({"z": "zfull"})  # .persist()
 
     return target_zfull, target_grids, tq_grids
 
@@ -1102,9 +1120,8 @@ def regrid_and_interpolate(
         do_regridded.sel(
             lat=slice(config["lat_min"], config["lat_max"]),
             lon=slice(config["lon_min"], config["lon_max"]),
-        )
-        .chunk({"level": -1})
-        .persist()
+        ).chunk({"level": -1})
+        # .persist()
     )
     # print('sliced_ds', sliced_do)
     # sliced_do.va[0,:,140:,150].plot(vmin= -40, vmax=40)
@@ -1124,7 +1141,7 @@ def regrid_and_interpolate(
         )
     else:
         g_era5_resampled, input_grids, tq_input_grids = process_year_month(
-            config, year, month
+            config, year, month, target_var
         )
         g_era5_resampled = standardize_coords_from(g_era5_resampled)
 
@@ -1180,9 +1197,9 @@ def regrid_and_interpolate(
 
     if config["input_model"] == "reanalysis":
         Z_era5 = geopotential_to_geopotential_height(g_era5)
-        Z_era5_per = Z_era5.persist().chunk({vdim: -1})
+        Z_era5_per = Z_era5.chunk({vdim: -1})
     else:
-        Z_era5_per = g_era5.persist().chunk({vdim: -1})
+        Z_era5_per = g_era5.chunk({vdim: -1})
 
     if target_var in ["ua", "va"]:
         # print('target_zfull_per_ua_va', target_zfull_per)
@@ -1329,7 +1346,7 @@ def save_interpolated_data(interpolated_era5_da, output_file):
 # End of the functions -------------------------------------------------------
 
 
-def main(config):
+def main(config_path, var_interp, override_ncpus=None, override_mem=None):
     """
     Main function to perform interpolation of variables from observational data to GCM (General Circulation Model) grid.
 
@@ -1344,12 +1361,35 @@ def main(config):
     Returns:
         None
     """
+    # Load YAML config
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
 
-    client = setup_client()
+    # Extract resources from config
+    ncpus = config.get("resources", {}).get("ncpus", 4)
+    mem_gb = config.get("resources", {}).get("mem_gb", 16)
+
+    # Override from command-line if provided
+    if override_ncpus:
+        ncpus = override_ncpus
+    if override_mem:
+        mem_gb = override_mem
+
+    # Dask performance settings
+    dask.config.set(
+        {"array.slicing.split_large_chunks": True, "array.chunk-size": "50MiB"}
+    )
+
+    # Start Dask client
+    client = setup_client(ncpus, mem_gb)
+
+    print("[INFO] Starting interpolation for variable:", var_interp)
 
     # target_model = config.target_model
     # Define variables to interpolate
-    var_interp = config["var_interp"]
+    # var_interp = variable if isinstance(variable, list) else [variable]
+    # var_interp = variable
+
     # Define start and end years
     start_year = config["startyear_h"]
     end_year = config["endyear_h"]
@@ -1360,8 +1400,16 @@ def main(config):
     if var_interp in ["ua", "va", "ta", "hus"]:
         for year in range(start_year, end_year + 1):
             for month in range(1, 13):
+                # Check if the output file already exists
+                output_file = f"{config['output_path']}/{var_interp}_{config['input_model'] if config['input_model'] == 'reanalysis' else config['input_gname']}_to_{config['gname']}_{year}-{month:02}.nc"
+                if os.path.exists(output_file):
+                    print(
+                        f"[INFO] Output file already exists: {output_file}. Skipping..."
+                    )
+                    continue
+
                 target_zfull, target_grids, tq_grids = process_year_month(
-                    config, year, month
+                    config, year, month, var_interp
                 )
                 # var_interp = "ua"
                 # print('press_year_month_output_target_zfull', target_zfull)
@@ -1387,12 +1435,30 @@ def main(config):
                     tq_grids,
                 )
 
+    del client
+    gc.collect()
+
 
 if __name__ == "__main__":
-    args = parse_arguments()
-    config = load_config(args.yp)
-    config["var_interp"] = args.var
-    # config.startyear_h = args.sy
-    # config.endyear_h = args.ey
-    main(config)
+    # args = parse_arguments()
+    # config = load_config(args.yp)
+    # config["var_interp"] = args.var
+    # # config.startyear_h = args.sy
+    # # config.endyear_h = args.ey
+    # if args.ncpus:
+    #     config["resources"]["ncpus"] = args.ncpus
+    # if args.mem:
+    #     config["resources"]["mem_gb"] = args.mem
+    # main(config)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--yp", required=True, help="Path to YAML config")
+    parser.add_argument("--var", required=True, help="Variable to process")
+    parser.add_argument(
+        "--ncpus", type=int, default=None, help="Override number of CPUs"
+    )
+    parser.add_argument("--mem", type=int, default=None, help="Override memory in GB")
+
+    args = parser.parse_args()
+    main(args.yp, args.var, args.ncpus, args.mem)
+
     print("All done!")

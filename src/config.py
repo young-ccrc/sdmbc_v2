@@ -1,12 +1,14 @@
 import os
 from os.path import dirname, exists, expanduser, join
-
 import yaml  # type: ignore
 
 
 class Config:
-    def __init__(self):
-        # Define potential paths for the configuration
+    def __init__(self, path=None):
+        """
+        Initialize configuration from a specified path, or fallback to standard search paths.
+        """
+        self.custom_path = path
         self.env_config_path = join(
             os.environ.get("VIRTUAL_ENV", ""), ".sdmbc_v2", "config.yaml"
         )
@@ -16,11 +18,18 @@ class Config:
             dirname(dirname(os.path.realpath(__file__))), "config.yaml"
         )
 
-        # Load the configuration
         self.config = self.load_config()
 
     def load_config(self):
-        # Check each path and load the first found
+        if self.custom_path:
+            if exists(self.custom_path):
+                with open(self.custom_path, "r") as f:
+                    return yaml.safe_load(f)
+            else:
+                raise FileNotFoundError(
+                    f"Specified config file not found: {self.custom_path}"
+                )
+
         for path in [
             self.env_config_path,
             self.user_config_path,
@@ -30,12 +39,12 @@ class Config:
             if exists(path):
                 with open(path, "r") as f:
                     return yaml.safe_load(f)
-        raise FileNotFoundError("No configuration file found.")
+
+        raise FileNotFoundError("No configuration file found in any known path.")
 
     def __getattr__(self, item):
-        # Allow dynamic access to configuration items as attributes
         return self.config.get(item)
 
 
-# Create a single global instance of Config
+# Optional: preserve current behavior
 config = Config()

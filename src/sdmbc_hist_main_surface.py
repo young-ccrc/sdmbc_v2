@@ -32,7 +32,7 @@ import warnings
 from multiprocessing import Pool, cpu_count
 from types import SimpleNamespace
 
-# import dask  # type: ignore
+import dask  # type: ignore
 import numpy as np  # type: ignore
 
 # import pandas as pd # type: ignore
@@ -40,14 +40,14 @@ import xarray as xr  # type: ignore
 from dask.distributed import Client  # type: ignore
 from tqdm import tqdm  # type: ignore
 
-# import yaml  # type: ignore
+import yaml  # type: ignore
 from bc_grid_function import apply_boundary_correction  # type: ignore
 from bc_grid_function import (
     bc_correction_grid_cell_future_multiprocess,
     bc_correction_grid_cell_hist_dask_2d,
     convert_bc_params_to_xarray,
 )
-from config import config  # type: ignore
+from config import Config  # type: ignore
 
 # from data_preparation import   # type: ignore
 from data_preparation import (
@@ -160,14 +160,37 @@ def dict_to_simplenamespace(d):
     return SimpleNamespace(**d)
 
 
-def main(config):
+def main(config_path, override_ncpus=None, override_mem=None):
     """
     Main function to run the SDMBCv2 bias correction process.
 
     Args:
         config (module): Configuration object that contains all user-defined parameters for the process.
     """
-    setup_client()
+    # setup_client()
+    # Load YAML config
+    with open(config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+        config = SimpleNamespace(**config_dict)
+
+    # Extract resources from config
+    ncpus = getattr(config, "resources", {}).get("ncpus", 4)
+    mem_gb = getattr(config, "resources", {}).get("mem_gb", 16)
+
+    # Override from command-line if provided
+    if override_ncpus:
+        ncpus = override_ncpus
+    if override_mem:
+        mem_gb = override_mem
+
+    # Dask performance settings
+    dask.config.set(
+        {"array.slicing.split_large_chunks": True, "array.chunk-size": "50MiB"}
+    )
+
+    # Start Dask client
+    client = setup_client(ncpus, mem_gb)
+    print(f"Using {ncpus} workers with {mem_gb} GB memory each.")
 
     startyear_h = config.startyear_h
     endyear_h = config.endyear_h
@@ -186,7 +209,7 @@ def main(config):
     cinfor = config.cinfor
     sinfor = config.sinfor
     version = config.version
-    # input_variables = config.target_variable
+    target_variable = config.target_variable
     upper_limit = config.upper_limit
     lower_limit = config.lower_limit
     out_figure_path = config.out_figure_path
@@ -208,7 +231,7 @@ def main(config):
     # if bc_hist:  # historical bias correction
 
     # List of variables to generate file paths for
-    variables = config.target_variable
+    variables = target_variable
 
     # Define parameters for selection
     lat_range = (lat_min, lat_max)  # Adjust as needed
@@ -223,6 +246,7 @@ def main(config):
         file_paths_by_variable_gcm = {}
         for variable in variables:
             file_paths_by_variable_gcm[variable] = generate_file_paths(
+                config,
                 b_path,
                 variable,
                 infor,
@@ -251,6 +275,7 @@ def main(config):
         else:
             for variable in variables:
                 file_paths_by_variable_obs[variable] = generate_file_paths(
+                    config,
                     b_path,
                     variable,
                     infor,
@@ -276,6 +301,7 @@ def main(config):
         # Load each variable and adjust longitude for ua and va if necessary
         for var_name, file_paths in file_paths_by_variable_gcm.items():
             data_var = load_preprocess_variable(
+                config,
                 file_paths,
                 var_name,
                 level,
@@ -304,6 +330,7 @@ def main(config):
         # Load each variable and adjust longitude for ua and va if necessary
         for var_name, file_paths in file_paths_by_variable_obs.items():
             obs_var = load_preprocess_variable(
+                config,
                 file_paths,
                 var_name,
                 level,
@@ -602,6 +629,7 @@ def main(config):
         )
 
         sliced_gcm_future = load_and_combine_variables(
+            config,
             domain[0],
             variables,
             level,
@@ -692,6 +720,7 @@ def main(config):
         print("Start multiprocessing for bias correction...")
 
         bc_corrected_gcm_future = bc_correction_grid_cell_future_multiprocess(
+            config,
             reshaped_gcm_delayed_f,
             bc_params_array_loaded,
             var_list_w,
@@ -854,5 +883,15 @@ def main(config):
 
 
 if __name__ == "__main__":
-    main(config)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--yp", required=True, help="Path to YAML config")
+    parser.add_argument(
+        "--ncpus", type=int, default=None, help="Override number of CPUs"
+    )
+    parser.add_argument("--mem", type=int, default=None, help="Override memory in GB")
+
+    args = parser.parse_args()
+    main(args.yp, args.ncpus, args.mem)
+
     print("All done!")
