@@ -1,0 +1,91 @@
+# Bias Correction Configuration Guide
+# This document provides a guide to configure the bias correction script. The configuration is done via a YAML file, which is a human-readable data serialization language. It is commonly used for configuration files and in applications where data is being stored or transmitted.
+
+# Configuration Parameters
+# Here are the parameters you can set in the configuration file:
+
+# bc_hist_path: The file path to the historical bias correction data.
+# bc_future_path: The file path to the future bias correction data.
+# obs_path: The file path to the ERA5 reanalysis data.
+# out_path: The output directory where the bias corrected data will be saved.
+# out_figure_path: The output directory where the figures will be saved.
+# bc_boundary: The boundary for bias correction.
+# input_variable: The list of input variables for bias correction.
+# target_variable: The list of target variables for bias correction.
+# infor, gname, period, cinfor, sinfor, version: Information about the historical data.
+# scenario, cinfor_f, version_f: Information about the future data.
+# bc_hist, startyear_h, endyear_h, starty_sfc_h, endy_sfc_h: Historical simulation period information.
+# bc_future, startyear_f, endyear_f, starty_sfc_f, endy_sfc_f: Future simulation period information.
+# no_of_variables, time_scale, no_of_iterations, missing_value, moving_window, correction_model, sub_daily_correction: Bias correction information.
+# lat_min, lat_max, lon_min, lon_max: The latitudes and longitudes of the selected area.
+# upper_limit, lower_limit: The physical upper and lower limits for the variables.
+# save_bc_output, draw_figure, reformat_to_original: Options for bias correction.
+
+# Usage
+# To use this configuration, simply fill in the parameters with your desired values and save the file. Then, pass the file path to the script as an argument. For example:
+# Please ensure that all file paths and variable names are correct. If you encounter any issues, please refer to the error messages for guidance.
+
+# Please note that this is a general guide. For more specific instructions, you should refer to the documentation provided by the developers or contact them directly.
+
+# =============== Input for bias correction =========================
+# File path -------------------------------------------------
+bc_hist_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2/6hrLev" # path to the data for historical bias correction
+bc_future_path: "/g/data/oi10/replicas/CMIP6/ScenarioMIP/CNRM-CERFACS/CNRM-CM6-1/ssp370/r1i1p1f2/6hrLev" # path to the data for future bias correction
+obs_path: "/g/data/w28/yk8692/input/era5/cnrm" # observation data path
+out_path: "/g/data/w28/yk8692/tests/calibration/cnrm_test" # path to save the output
+
+# Simulation periods, historical -----------------------------------
+bc_hist: True # Yes: True, No: False
+startyear_h: 1959 # start year for historical simulation
+endyear_h: 1989 # end year for historical simulation
+
+# GCM information
+infor: "6hrLev" # 6hrLev for 3d, Oday for 2D
+gname: "CNRM-CM6-1" # GCM name
+period: "historical" # historical, validation, or future
+cinfor: "r1i1p1f2"
+sinfor: "gn"
+version: "20180917"
+
+# Simulation periods, future -----------------------------------
+bc_future: False # Yes: True, No: False
+startyear_f: 1990 # start year for future simulation
+endyear_f: 2020 # end year for future simulation
+
+# GCM information
+scenario: "ssp370"
+cinfor_f: "r6i1p1f1"
+version_f: "20211213"
+period_f: "validation" # historical, validation, or future
+
+# Bias correction information -------------------------------------
+bc_boundary: "lateral" # "surface" for 2D "lateral" for 3D
+input_model: "reanalysis" # "reanalysis" for ERA5, "model" for CMIP6
+target_variable: ["hus", "ta", "ua", "va"] # ["tos"] for 2D, ["hus", "ta", "ua", "va"] for 3D
+slevel: 0 # start level for bias correction
+elevel: 1 # end level for bias correction
+no_of_variables: 3 # number of variables to be bias corrected, generally 3, 1 for 2D
+no_of_iterations: 1 # number of iterations for bias correction, default: 1
+correction_model: 4 # 1: mean, 2: mean and variance, 3: nested, 4: multivariate : 1-3 should be used for 2D
+sub_daily_correction: True # sub-daily bias correction, Yes: True, No: False
+
+# Selected area ---------------------------------------------------
+# latitudes and longitudes of the selected area
+lat_min: 10 # -55
+lat_max: 15 # -5
+lon_min: 110 # 80
+lon_max: 115 # 170
+
+# Physical upper limit (wind speed (m/s), temperature (K), specific humidity (g/kg), sea surface temperature (K))
+upper_limit: [190, 330, 100, 330]
+lower_limit: [0.001, 137, 0.001, 270]
+max_tile_size: 1500 # maximum grid cells within each tile for bias correction depending on the memory of the machine
+
+# Options for bias correction
+save_bc_output: True # save the bias corrected output, if not, only the BC factors will be saved
+reformat_to_original: False # reformating the output to the original format
+
+# if reformat is True
+archive_roots: ["/g/data/oi10/replicas/CMIP6", "/g/data/fs38/publications/CMIP6"]
+var_to_table: {"hus":"6hrLev", "ta":"6hrLev", "ua":"6hrLev", "va":"6hrLev", "tos":"Oday", "ps":"Amon"}
+# =============== Input for bias correction ended =========================
