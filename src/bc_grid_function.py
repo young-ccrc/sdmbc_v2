@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 import dask  # type: ignore
 import dask.array as da  # type: ignore
-import numpy as np
+import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
 import xarray as xr  # climate data manipulation library  # type: ignore
 
@@ -43,22 +43,12 @@ from sdmbc_bc_function import (
     bc_correction_hist,
     quantile_mapping_rescale_all,
     quantile_mapping_rescale_future,
-    rescale_to_sum_one,
 )
 
 # Suppress INFO and lower-level logs
 logging.getLogger("flox").setLevel(logging.WARNING)
 logging.getLogger("xarray").setLevel(logging.WARNING)
 logging.getLogger("dask").setLevel(logging.WARNING)
-
-var_list_w = (
-    ["w", "ta", "hus"] if config.bc_boundary == "lateral" else config.target_variable
-)
-var_list = (
-    config.target_variable
-    if config.bc_boundary == "lateral"
-    else config.target_variable
-)
 
 
 def correction_wrapper(config, gcm_data, obs_data):
@@ -107,6 +97,11 @@ def process_grid_cell(config, lat, lon, reshaped_gcm, reshaped_obs):
     Returns:
         dict: Contains corrected GCM data and bias correction parameters.
     """
+    var_list_w = (
+        ["w", "ta", "hus"]
+        if config.bc_boundary == "lateral"
+        else config.target_variable
+    )
     gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
     obs_data = [reshaped_obs[var].sel(lat=lat, lon=lon).values for var in var_list_w]
 
@@ -134,6 +129,12 @@ def process_grid_cell_future(config, lat, lon, reshaped_gcm, bc_params_array):
     Returns:
         dict: Contains bias-corrected GCM data for the future period.
     """
+    var_list_w = (
+        ["w", "ta", "hus"]
+        if config.bc_boundary == "lateral"
+        else config.target_variable
+    )
+
     gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
 
     # Find the nearest latitude and longitude indices in reshaped_gcm_delayed_f
@@ -168,6 +169,12 @@ def rescale_and_reformat(config, gcmc_corrected, ff_gcm, ff_obs):
     Returns:
         xarray.Dataset: Six-hourly rescaled bias-corrected GCM data.
     """
+    var_list_w = (
+        ["w", "ta", "hus"]
+        if config.bc_boundary == "lateral"
+        else config.target_variable
+    )
+
     # Rescale and Reformat using Fraction Factors and Sliced GCM Data
     if config.sub_daily_correction:
         ff_corrected = quantile_mapping_rescale_all(config, ff_obs, ff_gcm)
@@ -269,175 +276,10 @@ def apply_boundary_correction(config, six_hourly_data_hist, sliced_gcm):
         return six_hourly_data_hist
 
 
-# def process_tile(
-#     tile,
-#     variables,
-#     file_paths_by_variable_gcm,
-#     level,
-#     config,
-#     temp_dir,
-# ):
-#     """
-#     Process a single tile for bias correction, involving loading GCM and observational data,
-#     performing bias correction, and saving the outputs.
-
-#     Args:
-#         tile (dict): Dictionary defining the spatial bounds of the tile.
-#         variables (list): List of variable names to process.
-#         file_paths_by_variable_gcm (dict): File paths for GCM data by variable.
-#         file_paths_by_variable_obs (dict): File paths for observational data by variable.
-#         level (int): Processing level for multilevel data.
-#         config (module): Configuration object for bias correction parameters.
-#         temp_dir (str): Path to the temporary directory for intermediate files.
-
-#     Returns:
-#         None
-#     """
-
-#     """Process a single tile for bias correction."""
-#     lat_range = (tile["lat_min"], tile["lat_max"])
-#     lon_range = (tile["lon_min"], tile["lon_max"])
-
-#     # ------------------ Load GCM Data ------------------
-#     sliced_gcm = xr.Dataset()
-#     for var_name, file_paths in file_paths_by_variable_gcm.items():
-#         data_var = load_preprocess_variable(
-#             file_paths,
-#             var_name,
-#             level,
-#             lat_range,
-#             lon_range,
-#             config.startyear_h,
-#             config.endyear_h,
-#         )
-
-#         # Check if the variable is one of the wind components with different lon
-#         if var_name in ["ua", "va"]:
-#             # Let's assume hus and ta have the target longitude values, and they are already loaded
-#             target_lon = sliced_gcm.lon if "lon" in sliced_gcm else data_var.lon
-#             target_lat = sliced_gcm.lat if "lat" in sliced_gcm else data_var.lat
-#             target_lev = sliced_gcm.lev if "lev" in sliced_gcm else data_var.lev
-
-#             # Interpolate va to match the target latitude grid
-#             if not data_var.lat.equals(target_lat):
-#                 data_var = data_var.interp(
-#                     lat=target_lat,
-#                     method="linear",
-#                     kwargs={"fill_value": "extrapolate"},
-#                 )
-#             if not data_var.lon.equals(target_lon):
-#                 data_var = data_var.interp(
-#                     lon=target_lon,
-#                     method="linear",
-#                     kwargs={"fill_value": "extrapolate"},
-#                 )
-#             # Assign the adjusted longitude values to ua or va
-#             data_var = data_var.assign_coords(
-#                 lon=target_lon, lat=target_lat, lev=target_lev
-#             )
-#         if isinstance(data_var, xr.Dataset):  # Ensure we extract the correct DataArray
-#             data_var = data_var[var_name]
-#         sliced_gcm[var_name] = data_var
-
-#     if config.bc_boundary == "lateral":
-#         # sliced_gcm = sliced_gcm_all[0]
-#         assign_gcm = assign_w_6hr(sliced_gcm, config.bc_boundary)
-#         daily_gcm, fraction_factors_gcm = convert_to_daily_with_fraction(assign_gcm)
-#         # daily_gcm = daily_gcm.chunk({"time": 1000, "lat": "auto", "lon": "auto"})
-#         # daily_gcm_rechunk = daily_gcm.chunk({"time": 1000, "lat": -1, "lon": -1})
-#         # fraction_factors_gcm = fraction_factors_gcm.chunk(
-#         #     {"time": 1000, "lat": "auto", "lon": "auto"}
-#         # )
-#     else:
-#         daily_gcm = sliced_gcm
-
-#     # print("start delayed process gcm")
-#     # print("daily_gcm", daily_gcm)
-#     reshaped_gcm_delayed = extract_and_reshape_delayed(
-#         daily_gcm,
-#         config.no_of_variables,
-#         config.startyear_h,
-#         config.endyear_h,
-#         config.bc_boundary,
-#     )
-#     # print("reshaped_gcm_delayed", reshaped_gcm_delayed)
-#     if config.bc_boundary != "lateral":
-#         reshaped_gcm_delayed += 273.15
-
-#     # ------------------ Load Observational Data ------------------
-#     sliced_obs = xr.Dataset()
-#     # for var_name, file_paths in file_paths_by_variable_obs.items():
-#     #     obs_var = load_preprocess_variable(file_paths, var_name, level, lat_range, lon_range, config.startyear_h, config.endyear_h)
-#     #     if isinstance(obs_var, xr.Dataset):  # Ensure we extract the correct DataArray
-#     #         obs_var = obs_var[var_name]
-#     #     sliced_obs[var_name] = obs_var
-#     for var_name in variables:
-#         # Construct the path to the preprocessed file for this variable
-#         obs_file = os.path.join(
-#             temp_dir,
-#             f"preprocessed_obs_{var_name}_lev_{level}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc",
-#         )
-#         obs_var = xr.open_dataset(obs_file)[var_name]  # Load the variable from the file
-#         sliced_obs[var_name] = obs_var  # Add it to the observational dataset
-
-#     sliced_obs = sliced_obs.sel(
-#         lat=slice(sliced_gcm.lat.min().item(), sliced_gcm.lat.max().item()),
-#         lon=slice(sliced_gcm.lon.min().item(), sliced_gcm.lon.max().item()),
-#     )
-
-#     if config.bc_boundary == "lateral":
-#         # sliced_obs = sliced_obs_all[0]
-#         assign_obs = assign_w_6hr(sliced_obs, config.bc_boundary)
-#         daily_obs, fraction_factors_obs = convert_to_daily_with_fraction(assign_obs)
-#         # daily_obs = daily_obs.chunk({"time": 1000, "lat": "auto", "lon": "auto"})
-#         # daily_obs_rechunk = daily_obs.chunk({"time": 1000, "lat": -1, "lon": -1})
-#         # fraction_factors_obs = fraction_factors_obs.chunk(
-#         #     {"time": 1000, "lat": "auto", "lon": "auto"}
-#         # )
-#     else:
-#         daily_obs = sliced_obs
-
-#     # print("start delayed process obs")
-#     # print("daily_obs", daily_obs)
-#     reshaped_obs_delayed = extract_and_reshape_delayed(
-#         daily_obs,
-#         config.no_of_variables,
-#         config.startyear_h,
-#         config.endyear_h,
-#         config.bc_boundary,
-#     )
-#     # print("reshaped_obs_delayed", reshaped_obs_delayed)
-
-#     # Perform bias correction across the tile
-#     if config.bc_boundary == "lateral":
-#         bc_corrected_gcm_hist_tile, bc_params_tile = bc_correction_grid_cell_hist_dask(
-#             reshaped_gcm_delayed,
-#             reshaped_obs_delayed,
-#             fraction_factors_gcm,
-#             fraction_factors_obs,
-#             var_list_w,
-#             sliced_gcm,
-#             config.startyear_h,
-#             config.endyear_h,
-#         )
-#     else:
-#         bc_corrected_gcm_hist_tile, bc_params_tile = (
-#             bc_correction_grid_cell_hist_dask_2d(
-#                 reshaped_gcm_delayed,
-#                 reshaped_obs_delayed,
-#                 var_list_w,
-#                 config.startyear_h,
-#             )
-#         )
-
-#     return bc_corrected_gcm_hist_tile, bc_params_tile
-
-
 def process_tile(
     config,
     sliced_gcm,
     sliced_obs,
-    config,
 ):
     """
     Process a single tile for bias correction, involving loading GCM and observational data,
@@ -460,6 +302,12 @@ def process_tile(
         )
     else:
         daily_gcm = sliced_gcm
+
+    var_list_w = (
+        ["w", "ta", "hus"]
+        if config.bc_boundary == "lateral"
+        else config.target_variable
+    )
 
     reshaped_gcm_delayed = extract_and_reshape_delayed(
         config,
@@ -523,7 +371,6 @@ def future_subdaily_correction(
     sliced_obs,
     ff_future,
     bc_corrected_gcm_future_tile,
-    config,
 ):
     """
     Process a single tile for bias correction for future sub-daily data.
@@ -589,6 +436,11 @@ def future_subdaily_correction(
         assign_gcm = assign_w_6hr(config, sliced_gcm, config.bc_boundary)
         _, ff_gcm = convert_to_daily_with_fraction(config, assign_gcm)
 
+    var_list_w = (
+        ["w", "ta", "hus"]
+        if config.bc_boundary == "lateral"
+        else config.target_variable
+    )
     # # ------------------ Load Observational Data ------------------
     # sliced_obs = xr.Dataset()
 
@@ -694,52 +546,11 @@ def load_bc_params_subset(
     return bc_params_subset
 
 
-# def load_bc_params_subset(
-#     file_path, lat_values, lon_values, level, lat_min, lat_max, lon_min, lon_max
-# ):
-#     """
-#     Load only the required subset of bc_params from a large npy file, based on latitude and longitude range.
-
-#     Args:
-#         file_path (str): Path to the `.npy` file.
-#         lat_values (np.ndarray): Latitude values corresponding to bc_params indices.
-#         lon_values (np.ndarray): Longitude values corresponding to bc_params indices.
-#         lat_min (float): Minimum latitude to select.
-#         lat_max (float): Maximum latitude to select.
-#         lon_min (float): Minimum longitude to select.
-#         lon_max (float): Maximum longitude to select.
-
-#     Returns:
-#         np.ndarray: Subset of bc_params with selected lat/lon indices.
-#     """
-
-#     # Load the full file (necessary since dtype=object)
-#     bc_params_array = np.load(
-#         f"{file_path}/bc_params_3d_historical_lev_{level}_{config.gname}_to_{config.input_model}_{config.startyear_h}_{config.endyear_h}.npy",
-#         allow_pickle=True,
-#     )  # Remove mmap_mode
-
-#     # Find indices for the latitude and longitude range
-#     lat_indices = np.where((lat_values >= lat_min) & (lat_values <= lat_max))[0]
-#     lon_indices = np.where((lonValues >= lon_min) & (lonValues <= lon_max))[0]
-
-#     # Select only the needed subset
-#     bc_params_subset = bc_params_array[np.ix_(lat_indices, lon_indices)]
-
-#     # Convert dictionaries to SimpleNamespace for easy access
-#     for i in range(bc_params_subset.shape[0]):
-#         for j in range(bc_params_subset.shape[1]):
-#             bc_params_subset[i, j] = SimpleNamespace(**bc_params_subset[i, j])
-
-#     return bc_params_subset
-
-
 def process_tile_future(
     config,
     tile,
     variables,
     level,
-    config,
     gcm_hist,
     obs_hist,
     temp_dir,
@@ -761,6 +572,12 @@ def process_tile_future(
     """
 
     """Process a single tile for bias correction."""
+
+    var_list_w = (
+        ["w", "ta", "hus"]
+        if config.bc_boundary == "lateral"
+        else config.target_variable
+    )
 
     # =============== Load GCM ===============
     sliced_gcm_future = load_and_combine_variables(
@@ -837,7 +654,6 @@ def process_tile_future(
             obs_hist,
             ff_future,
             bc_corrected_gcm_future_tile,
-            config,
         )
     else:
         bc_corrected_gcm_future = daily_to_6hourly_xr(
@@ -1199,6 +1015,13 @@ def correction_wrapper_pool(args):
     Runs in parallel using multiprocessing.
     """
     config, lat, lon, reshaped_gcm, reshaped_obs = args
+
+    var_list_w = (
+        ["w", "ta", "hus"]
+        if config.bc_boundary == "lateral"
+        else config.target_variable
+    )
+
     # Print the process ID (PID) to check parallel execution
     # print(f"Processing lat: {lat}, lon: {lon} on process ID: {os.getpid()}")
 
@@ -1541,7 +1364,11 @@ def correction_wrapper_future_pool(args):
     config, lat, lon, reshaped_gcm, bc_params_array = args
     # Print the process ID (PID) to check parallel execution
     # print(f"Processing lat: {lat}, lon: {lon} on process ID: {os.getpid()}")
-
+    var_list_w = (
+        ["w", "ta", "hus"]
+        if config.bc_boundary == "lateral"
+        else config.target_variable
+    )
     # Extract GCM data for this (lat, lon)
     gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
 
@@ -1602,7 +1429,7 @@ def bc_correction_grid_cell_future_multiprocess(
     # Use multiprocessing Pool
     num_workers = cpu_count()  # Get number of CPU cores
     n = num_workers
-    n = min(len(os.sched_getaffinity(0)), num_workers, 96)
+    # n = min(len(os.sched_getaffinity(0)), num_workers, 96)
     print(f"Using {n} CPU cores for parallel processing...")
 
     with Pool(processes=n) as pool:
@@ -1853,116 +1680,118 @@ def adjust_dates_to_target_year(config, corrected_data, target_year):
     return result_filtered
 
 
-def apply_moving_window_bias_correction(
-    config,
-    lat,
-    lon,
-    gcm_future,
-    gcm_ref,
-    fraction_factors,
-    bc_params_array,
-    start_year,
-    end_year,
-    window_size=30,
-):
-    """
-    Apply moving window bias correction over a given time frame for a grid cell.
+# def apply_moving_window_bias_correction(
+#     config,
+#     lat,
+#     lon,
+#     gcm_future,
+#     gcm_ref,
+#     fraction_factors,
+#     bc_params_array,
+#     start_year,
+#     end_year,
+#     window_size=30,
+# ):
+#     """
+#     Apply moving window bias correction over a given time frame for a grid cell.
 
-    Args:
-        lat (float): Latitude of the grid cell.
-        lon (float): Longitude of the grid cell.
-        gcm_future (xarray.Dataset): Future GCM data.
-        gcm_ref (xarray.Dataset): Reference GCM data.
-        fraction_factors (xarray.Dataset): Fraction factors for correction.
-        bc_params_array (xarray.Dataset): Bias correction parameters.
-        start_year (int): Start year for bias correction.
-        end_year (int): End year for bias correction.
-        window_size (int, optional): Size of the moving window for correction. Defaults to 30.
+#     Args:
+#         lat (float): Latitude of the grid cell.
+#         lon (float): Longitude of the grid cell.
+#         gcm_future (xarray.Dataset): Future GCM data.
+#         gcm_ref (xarray.Dataset): Reference GCM data.
+#         fraction_factors (xarray.Dataset): Fraction factors for correction.
+#         bc_params_array (xarray.Dataset): Bias correction parameters.
+#         start_year (int): Start year for bias correction.
+#         end_year (int): End year for bias correction.
+#         window_size (int, optional): Size of the moving window for correction. Defaults to 30.
 
-    Returns:
-        xarray.Dataset: Bias-corrected dataset for the specified grid cell and time window.
-    """
+#     Returns:
+#         xarray.Dataset: Bias-corrected dataset for the specified grid cell and time window.
+#     """
+#     var_list_w = (
+#         ["w", "ta", "hus"] if config.bc_boundary == "lateral" else config.target_variable
+#     )
 
-    corrected_dataset = xr.Dataset()
+#     corrected_dataset = xr.Dataset()
 
-    for target_year in range(start_year, end_year + 1):
-        pre_window = min(window_size // 2, target_year - start_year)
-        post_window = min(window_size // 2, end_year - target_year)
+#     for target_year in range(start_year, end_year + 1):
+#         pre_window = min(window_size // 2, target_year - start_year)
+#         post_window = min(window_size // 2, end_year - target_year)
 
-        # If not enough data for a 30-year window, adjust to use as much as possible
-        if pre_window + post_window + 1 < window_size:
-            if target_year - start_year < window_size // 2:
-                # Closer to start, prioritize adding years after the target year
-                actual_window_start = min(start_year, target_year)
-                actual_window_end = min(
-                    end_year, target_year + 15
-                )  # Use 15 years after, if available
-            else:
-                # Closer to end, prioritize adding years before the target year
-                actual_window_start = max(
-                    start_year, target_year - 15
-                )  # Use 15 years before, if available
-                actual_window_end = max(target_year, end_year)
-        else:
-            actual_window_start = target_year - pre_window
-            actual_window_end = target_year + post_window
+#         # If not enough data for a 30-year window, adjust to use as much as possible
+#         if pre_window + post_window + 1 < window_size:
+#             if target_year - start_year < window_size // 2:
+#                 # Closer to start, prioritize adding years after the target year
+#                 actual_window_start = min(start_year, target_year)
+#                 actual_window_end = min(
+#                     end_year, target_year + 15
+#                 )  # Use 15 years after, if available
+#             else:
+#                 # Closer to end, prioritize adding years before the target year
+#                 actual_window_start = max(
+#                     start_year, target_year - 15
+#                 )  # Use 15 years before, if available
+#                 actual_window_end = max(target_year, end_year)
+#         else:
+#             actual_window_start = target_year - pre_window
+#             actual_window_end = target_year + post_window
 
-        window_data = gcm_future.sel(
-            year=slice(str(actual_window_start), str(actual_window_end))
-        )
-        fraction_factor = fraction_factors.sel(
-            time=slice(str(actual_window_start), str(actual_window_end))
-        )
+#         window_data = gcm_future.sel(
+#             year=slice(str(actual_window_start), str(actual_window_end))
+#         )
+#         fraction_factor = fraction_factors.sel(
+#             time=slice(str(actual_window_start), str(actual_window_end))
+#         )
 
-        if config.sub_daily_correction:
-            corrected_data = bc_correction_grid_cell_future_daily_dask(
-                config,
-                lat,
-                lon,
-                fraction_factor,
-                fraction_factor,
-                window_data,
-                fraction_factor,
-                bc_params_array,
-                actual_window_start,
-                actual_window_end,
-                var_list,
-                gcm_future,
-            )
-        else:
-            corrected_data = bc_correction_grid_cell_future_daily_dask(
-                config,
-                lat,
-                lon,
-                gcm_ref,
-                window_data,
-                fraction_factor,
-                bc_params_array,
-                actual_window_start,
-                actual_window_end,
-                var_list_w,
-            )
+#         if config.sub_daily_correction:
+#             corrected_data = bc_correction_grid_cell_future_multiprocess(
+#                 config,
+#                 lat,
+#                 lon,
+#                 fraction_factor,
+#                 window_data,
+#                 fraction_factor,
+#                 bc_params_array,
+#                 actual_window_start,
+#                 actual_window_end,
+#                 var_list_w,
+#                 gcm_future,
+#             )
+#         else:
+#             corrected_data = bc_correction_grid_cell_future_dask(
+#                 config,
+#                 lat,
+#                 lon,
+#                 gcm_ref,
+#                 window_data,
+#                 fraction_factor,
+#                 bc_params_array,
+#                 actual_window_start,
+#                 actual_window_end,
+#                 var_list_w,
+#             )
 
-        # Adjusting datetime to target year and handling February 29th
-        # corrected_data = adjust_dates_to_target_year(corrected_data, target_year)
-        corrected_data = corrected_data.sel(
-            time=slice(f"{target_year}-01-01", f"{target_year}-12-31")
-        )
+#         # Adjusting datetime to target year and handling February 29th
+#         # corrected_data = adjust_dates_to_target_year(corrected_data, target_year)
+#         corrected_data = corrected_data.sel(
+#             time=slice(f"{target_year}-01-01", f"{target_year}-12-31")
+#         )
 
-        if not pd.Index(corrected_data["time"].values).is_monotonic_increasing:
-            corrected_data = corrected_data.sortby("time")
-        if target_year == start_year:
-            corrected_dataset = xr.merge(
-                [corrected_dataset, corrected_data], compat="override"
-            )
-        else:
-            corrected_dataset = xr.concat(
-                [corrected_dataset, corrected_data], dim="time"
-            )
+#         if not pd.Index(corrected_data["time"].values).is_monotonic_increasing:
+#             corrected_data = corrected_data.sortby("time")
+#         if target_year == start_year:
+#             corrected_dataset = xr.merge(
+#                 [corrected_dataset, corrected_data], compat="override"
+#             )
+#         else:
+#             corrected_dataset = xr.concat(
+#                 [corrected_dataset, corrected_data], dim="time"
+#             )
 
-        print(f"{target_year} completed")
+#         print(f"{target_year} completed")
 
-    return corrected_dataset
+#     return corrected_dataset
 
 
 def convert_bc_params_to_xarray(config, bc_params_array, lat_values, lon_values):

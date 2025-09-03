@@ -31,9 +31,8 @@
 # File path -------------------------------------------------
 bc_hist_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1/6hrLev" # path to the data for historical bias correction
 bc_future_path: "/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp370/r6i1p1f1/6hrLev" # path to the data for future bias correction
-obs_path: "/g/data/w28/yk8692/input/era5" # observation data path
-out_path: "/g/data/w28/yk8692/sdmbc_v2/tests/validation/subdaily_chosen_domain_land_with1iterwithannual" # path to save the output
-out_figure_path: "/g/data/w28/yk8692/sdmbc_v2/tests/validation/subdaily_chosen_domain_land_with1iterwithannual" # path to save the figures
+obs_path: "/g/data/w28/yk8692/input/era5/access_esm" # observation data path
+out_path: "/g/data/w28/yk8692/tests/access/calibration/" # path to save the output
 
 # Simulation periods, historical -----------------------------------
 bc_hist: True # Yes: True, No: False
@@ -64,7 +63,7 @@ bc_boundary: "lateral" # "surface" for 2D "lateral" for 3D
 input_model: "reanalysis" # "reanalysis" for ERA5, "model" for CMIP6
 target_variable: ["hus", "ta", "ua", "va"] # ["tos"] for 2D, ["hus", "ta", "ua", "va"] for 3D
 slevel: 0 # start level for bias correction
-elevel: 24 # end level for bias correction
+elevel: 1 # end level for bias correction
 no_of_variables: 3 # number of variables to be bias corrected, generally 3, 1 for 2D
 no_of_iterations: 1 # number of iterations for bias correction, default: 1
 correction_model: 4 # 1: mean, 2: mean and variance, 3: nested, 4: multivariate : 1-3 should be used for 2D
@@ -72,10 +71,10 @@ sub_daily_correction: True # sub-daily bias correction, Yes: True, No: False
 
 # Selected area ---------------------------------------------------
 # latitudes and longitudes of the selected area
-lat_min: 30 # Minimum latitude
-lat_max: 35 # Maximum latitude
-lon_min: 100 # Minimum longitude
-lon_max: 110 # Maximum longitude
+lat_min: 10 # -55
+lat_max: 15 # -5
+lon_min: 110 # 80
+lon_max: 115 # 170
 
 # Physical upper limit (wind speed (m/s), temperature (K), specific humidity (g/kg), sea surface temperature (K))
 upper_limit: [190, 330, 100, 330]
@@ -86,4 +85,7 @@ max_tile_size: 1500 # maximum grid cells within each tile for bias correction de
 save_bc_output: True # save the bias corrected output, if not, only the BC factors will be saved
 reformat_to_original: False # reformating the output to the original format
 
+# if reformat is True
+archive_roots: ["/g/data/oi10/replicas/CMIP6", "/g/data/fs38/publications/CMIP6"]
+var_to_table: {"hus":"6hrLev", "ta":"6hrLev", "ua":"6hrLev", "va":"6hrLev", "tos":"Oday", "ps":"Amon"}
 # =============== Input for bias correction ended =========================

@@ -6,10 +6,10 @@
 # Paths to input data and output directories
 bc_hist_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1/Oday" # Historical bias correction data path
 bc_future_path: "/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp370/r6i1p1f1/Oday" #
-obs_path: "/g/data/w28/yk8692/input/era5" # Path to ERA5 observation data
-obs_future_path: "/g/data/w28/yk8692/input/era5/validation" # Path to ERA5 observation data
-out_path: "/g/data/w28/yk8692/sdmbc_v2/tests/validation" # Directory to save bias-corrected output
-out_figure_path: "/g/data/w28/yk8692/sdmbc_v2/tests/validation" # Directory to save figures
+obs_path: "/g/data/w28/yk8692/input/era5/access_esm" # Path to ERA5 observation data
+obs_future_path: "/g/data/w28/yk8692/input/era5/access_esm" # Path to ERA5 observation data
+out_path: "/g/data/w28/yk8692/tests/access/calibration" # Directory to save bias-corrected output
+
 
 # ================= Simulation Periods =================
 # Historical simulation settings
@@ -64,7 +64,11 @@ lower_limit: [0.0001, 150, 0.0001, 270] # Lower limits for variables
 save_bc_output: True # Save bias-corrected output (True: Yes, False: Save factors only)
 reformat_to_original: False # Reformat output to original format (True: Yes, False: No)
 
+# if reformat is True
+archive_roots: ["/g/data/oi10/replicas/CMIP6", "/g/data/fs38/publications/CMIP6"]
+var_to_table: {"hus":"6hrLev", "ta":"6hrLev", "ua":"6hrLev", "va":"6hrLev", "tos":"Oday", "ps":"Amon"}
+
 # ================= Usage =================
 # Edit the above parameters as needed. Save the file and pass its path to the script as follows:
-# python sdmbc_hist_main.py --config /path/to/config.yaml
+# python sdmbc_hist_main.py --yp /path/to/config.yaml
 # Ensure all file paths and variable names are correct. Refer to documentation for further details.

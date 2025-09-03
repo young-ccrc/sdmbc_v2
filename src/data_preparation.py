@@ -46,7 +46,8 @@ import dask  # type: ignore
 import numpy as np  # arrays and matrix math # type: ignore
 import pandas as pd  # type: ignore
 import xarray as xr  # type: ignore
-import yaml  # type: ignore
+
+# import yaml  # type: ignore
 
 # from config import config
 
@@ -163,6 +164,8 @@ def is_within_period(file_start, file_end, target_start, target_end):
     """
 
     # True if file period overlaps with the target period
+    if file_start is None or file_end is None:
+        return False
     return not (file_end < target_start or file_start > target_end)
 
 
@@ -247,7 +250,7 @@ def extract_years_remap(filename):
 
 
 def parse_start_hour_from_filename(fname):
-    match = re.search(r"_(\d{10})-(\d{10})\.nc$", fname)
+    match = re.search(r"_(\d{12})-(\d{12})\.nc$", fname)
     if not match:
         return None
     start_str = match.group(1)
@@ -255,7 +258,7 @@ def parse_start_hour_from_filename(fname):
 
 
 def covers_december(file_path, year_minus_1):
-    match = re.search(r"_(\d{10})-(\d{10})\.nc$", file_path)
+    match = re.search(r"_(\d{12})-(\d{12})\.nc$", file_path)
     if not match:
         return False
     start_str, end_str = match.groups()
@@ -585,7 +588,22 @@ def extract_and_reshape_xr(ds_selected, start_year, end_year):
                         else 31 if month in [1, 3, 5, 7, 8, 10, 12] else 30
                     )
                 )
-                start_idx = date_index.get_loc(f"{year}-{month:02d}-01")
+                loc = date_index.get_loc(f"{year}-{month:02d}-01")
+                if isinstance(loc, slice):
+                    if loc.start is None:
+                        raise TypeError("Slice start is None, cannot determine index")
+                    start_idx = loc.start
+                elif isinstance(loc, np.ndarray):
+                    # Find the first True index if it's a boolean array
+                    true_indices = np.where(loc)[0]
+                    if true_indices.size == 0:
+                        raise TypeError("No True index found in boolean array")
+                    start_idx = true_indices[0]
+                elif isinstance(loc, (int, np.integer)):
+                    start_idx = int(loc)
+                else:
+                    raise TypeError(f"Unexpected type returned by get_loc: {type(loc)}")
+
                 reshaped_var[year_idx, month - 1, :days_in_month, :, :] = var_np[
                     start_idx : start_idx + days_in_month
                 ]
@@ -778,7 +796,9 @@ def fill_reshaped_data(var, ds_selected, reshaped_data):
     return reshaped_data
 
 
-def extract_and_reshape_delayed(config, ds_selected, nvar, start_year, end_year, bc_boundary):
+def extract_and_reshape_delayed(
+    config, ds_selected, nvar, start_year, end_year, bc_boundary
+):
     """
     Extract and reshape dataset asynchronously, including applying bias correction boundaries.
 
@@ -936,14 +956,16 @@ def align_daily_data_xr(config, daily_data_xr, start_year):
     flattened_data = daily_data_xr.stack(time=("year", "month", "day"))
 
     # Filter out invalid dates from the MultiIndex
-    valid_mask = pd.to_datetime(
-        {
-            "year": flattened_data["year"].values,
-            "month": flattened_data["month"].values,
-            "day": flattened_data["day"].values,
-        },
-        errors="coerce",
-    ).notna()
+    valid_mask = ~pd.isna(
+        pd.to_datetime(
+            {
+                "year": flattened_data["year"].values,
+                "month": flattened_data["month"].values,
+                "day": flattened_data["day"].values,
+            },
+            errors="coerce",
+        )
+    )
 
     # Apply the mask to filter out invalid dates
     flattened_data = flattened_data.isel(time=valid_mask)
@@ -974,7 +996,9 @@ def align_daily_data_xr(config, daily_data_xr, start_year):
     return aligned_data_xr
 
 
-def daily_to_6hourly_xr(config, daily_data_np, fraction_factors_xr, var_names, starty, endy):
+def daily_to_6hourly_xr(
+    config, daily_data_np, fraction_factors_xr, var_names, starty, endy
+):
     """
     Convert daily data to 6-hourly data using fraction factors.
 
@@ -1109,7 +1133,7 @@ def expand_config_bounds_from_data(lat_min, lat_max, lon_min, lon_max, sample_fi
     return latmin, latmax, lonmin, lonmax, lat_size, lon_size, lat_values, lon_values
 
 
-def determine_tiles(lat_size, lon_size, max_tile_size=config.max_tile_size):
+def determine_tiles(config, lat_size, lon_size, max_tile_size=None):
     """
     Determines the number of tiles based on the total number of grid points using an index-based tiling approach.
 
@@ -1123,6 +1147,7 @@ def determine_tiles(lat_size, lon_size, max_tile_size=config.max_tile_size):
     Returns:
         (int, int): Number of tiles for latitude and longitude.
     """
+    max_tile_size = config.max_tile_size if max_tile_size is None else max_tile_size
 
     # Compute total number of grid points
     total_points = lat_size * lon_size
@@ -1257,14 +1282,18 @@ def generate_file_paths_future(config, variable, start_year, end_year, data_type
     if config.bc_boundary == "lateral":
         for year in range(start_year, end_year + 1):
             if data_type == "future":
-                base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(year)
+                base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(
+                    config, year
+                )
                 file_path_pattern_gcm = (
                     f"{base_path}/{variable}/g*/v*/"
                     f"{variable}_{info}_{gna}_*_{year}*.nc"
                 )
                 file_paths.extend(glob.glob(file_path_pattern_gcm))
             elif data_type == "validation":
-                base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(year)
+                base_path, info, gna, peri, cinf, sinf, vers = determine_base_path(
+                    config, year
+                )
                 file_path_pattern_gcm = (
                     f"{base_path}/{variable}/g*/v*/"
                     f"{variable}_{info}_{gna}_*_{year}*.nc"
@@ -1473,11 +1502,16 @@ def load_and_combine_variables(
             future_start_year = max(start_year, 2015)
             for variable in variables:
                 file_paths = generate_file_paths_future(
-                    config, variable, future_start_year - 1, end_year, data_type=data_type
+                    config,
+                    variable,
+                    future_start_year - 1,
+                    end_year,
+                    data_type=data_type,
                 )
                 # print('>2015', file_paths)
                 data_var_h = load_preprocess_variable(
-                    config, file_paths[0],
+                    config,
+                    file_paths[0],
                     variable,
                     level,
                     lat_range,
@@ -1486,7 +1520,8 @@ def load_and_combine_variables(
                     end_year,
                 )
                 data_var_f = load_preprocess_variable(
-                    config, file_paths[1:],
+                    config,
+                    file_paths[1:],
                     variable,
                     level,
                     lat_range,
@@ -1532,7 +1567,14 @@ def load_and_combine_variables(
                 config, variable, start_year, end_year, data_type=data_type
             )
             data_var = load_preprocess_variable(
-                config, file_paths, variable, level, lat_range, lon_range, start_year, end_year
+                config,
+                file_paths,
+                variable,
+                level,
+                lat_range,
+                lon_range,
+                start_year,
+                end_year,
             )
             sliced_ds_hist[variable] = data_var
 
