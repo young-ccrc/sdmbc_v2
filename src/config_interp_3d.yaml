@@ -1,0 +1,105 @@
+# =============== README =========================
+# This script performs interpolation of data between ERA5 reanalysis (or GCM) and a GCM.
+# It takes input data from the ERA5 reanalysis (or GCM) and the GCM, and interpolates the reanalysis data (or GCM) data onto the same grid as the target GCM data.
+# The interpolated data is then saved to the specified output path.
+# The script requires the following input parameters:
+
+# File paths:
+# - input_path: Path to the ERA5 reanalysis (or GCM needs to be interpolated) data
+# - target_path: Path to the GCM data
+# - target_g_path: Path to the GCM geopotential height data. None if unavailable.
+# - output_path: Path to save the output files
+# - input_z_path: Path to the observed geopotential data, files should be in the following path: input_z_path/year/files_here
+
+# Model information:
+# - input_model: "reanalysis" or "gcm" (specify which model the input data is from)
+# - target_model: "gcm" (specify which model the target data is from)
+
+# Target GCM information:
+# - infor: 6-hourly full level data
+# - gname: Name of the GCM (e.g., "CNRM-CM6-1")
+# - period: Period of the GCM data (e.g., "historical")
+# - cinfor: GCM configuration information (e.g., "r1i1p1f2")
+# - sinfor: GCM spatial information (e.g., "gr")
+# - version: Version of the GCM data (e.g., "v20180917")
+
+# Selected area:
+# - lat_min: Minimum latitude of the selected area
+# - lat_max: Maximum latitude of the selected area
+# - lon_min: Minimum longitude of the selected area
+# - lon_max: Maximum longitude of the selected area
+
+# Simulation periods:
+# - startyear_h: Start year of the simulation period
+# - endyear_h: End year of the simulation period
+
+# Note: Replace the placeholder values with the actual file paths, model information, target GCM information, input GCM information, selected area, and simulation periods.
+
+# Contact: youngil.kim@unsw.edu.au
+# ================================================
+
+# =============== Input for interpolation =========================
+# File path -------------------------------------------------
+input_path: "/g/data/rt52/era5/pressure-levels/reanalysis" # path to the ERA5 reanalysis data (or GCM needs to be interpolated)
+input_path_sst: "/g/data/rt52/era5/single-levels/reanalysis" # path to the observed SST data, files should be in the following path: input_path_sst/year/files_here
+input_z_path: "/g/data/rt52/era5/pressure-levels/reanalysis/z" # path to the observed geopotential data, files should be in the following path: input_z_path/year/files_here
+
+# target_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2" #  # "/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp370/r6i1p1f1"
+target_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1"
+
+# target_path_sst: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2" # "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r1i1p1f1"
+target_path_sst: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1"
+target_g_path: None
+# target_orog_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2" # path to the fx file of the target GCM, e.g., orography, land-sea mask, etc.
+target_orog_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1" # path to the fx file of the target GCM, e.g., orography, land-sea mask, etc.
+
+output_path: "/g/data/w28/yk8692/input/era5/access_esm" # /g/data/w28/yk8692/era5/sdmbc_v2 # "/g/data/w28/yk8692/input/era5/validation"
+
+# Model
+input_model: "reanalysis"
+target_model: "gcm"
+
+# Target GCM informatin -------------------------------------------
+# infor: "6hrLev"
+# gname: "CNRM-CM6-1"
+# period: "historical"
+# cinfor: "r1i1p1f2"
+# sinfor: "gr"
+# version: "v20180917"
+
+infor: "6hrLev"
+gname: "ACCESS-ESM1-5"
+period: "historical"
+cinfor: "r6i1p1f1"
+sinfor: "gn"
+version: "v20200529"
+
+# infor: "6hrLev"
+# gname: "ACCESS-ESM1-5"
+# period: "ssp370"
+# cinfor: "r6i1p1f1"
+# sinfor: "gn"
+# version: "v20211213"
+
+# # Input GCM information -------------------------------------------
+# input_infor: "6hrLev"
+# input_gname: "CNRM-CM6-1"
+# input_period: "historical"
+# input_cinfor: "r1i1p1f2"
+# input_sinfor: "gr"
+# input_version: "v20180917"
+
+# Selected area ---------------------------------------------------
+# latitudes and longitudes of the selected area
+lat_min: 10 # -55
+lat_max: 15 # -5
+lon_min: 110 # 80
+lon_max: 115 # 170
+# lat_min: -90 # -55
+# lat_max: 90 # -5
+# lon_min: 0 # 80
+# lon_max: 360 # 170
+# Simulation periods ----------------------------------------------
+startyear_h: 1959
+endyear_h: 2014
+# =============== Input for interpolation ended =========================

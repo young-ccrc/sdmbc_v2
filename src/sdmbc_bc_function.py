@@ -44,28 +44,28 @@ import xarray as xr  # type: ignore
 # from mrmbc import constants as cons  # type: ignore
 from mrmbc import mbc_subroutines as mbc  # type: ignore
 
-from config import config
-
 # import yaml  # type: ignore
 from data_preparation import is_leap_year
+
+# from config import config
+
 
 # ==========================================================================#
 
 # Ignore a specific category of warning
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-
-correction_model = config.correction_model
-startyear_h = config.startyear_h
-endyear_h = config.endyear_h
-lower_limit = config.lower_limit
-no_of_iterations = config.no_of_iterations
-no_of_variables = config.no_of_variables
-startyear_h = config.startyear_h
-upper_limit = config.upper_limit
-bc_boundary = config.bc_boundary
-startyear_f = config.startyear_f
-endyear_f = config.endyear_f
+# correction_model = config.correction_model
+# startyear_h = config.startyear_h
+# endyear_h = config.endyear_h
+# lower_limit = config.lower_limit
+# no_of_iterations = config.no_of_iterations
+# no_of_variables = config.no_of_variables
+# startyear_h = config.startyear_h
+# upper_limit = config.upper_limit
+# bc_boundary = config.bc_boundary
+# startyear_f = config.startyear_f
+# endyear_f = config.endyear_f
 time_scale = 0  # 0: daily, 1: monthly, default: 0
 missing_value = 0.00001  # missing value in the input data
 moving_window = 15  # centred moving window if input data is at daily time scale
@@ -219,12 +219,8 @@ def process_variable(obs_ds, sim_ds, time_steps):
 
     for step in time_steps:
         # Select data for the current time step
-        obs_step = obs_ds.sel(time=obs_ds.time.dt.strftime("%H:%M") == step).chunk(
-            {"time": -1}
-        )
-        sim_step = sim_ds.sel(time=sim_ds.time.dt.strftime("%H:%M") == step).chunk(
-            {"time": -1}
-        )
+        obs_step = obs_ds.sel(time=obs_ds.time.dt.strftime("%H:%M") == step)
+        sim_step = sim_ds.sel(time=sim_ds.time.dt.strftime("%H:%M") == step)
 
         obs_groups = obs_step.groupby("adjusted_dayofyear").groups
         sim_groups = sim_step.groupby("adjusted_dayofyear").groups
@@ -258,7 +254,7 @@ def process_variable(obs_ds, sim_ds, time_steps):
 
 
 def quantile_mapping_rescale_all(
-    obs_ds, sim_ds, time_steps=("00:00", "06:00", "12:00", "18:00")
+    config, obs_ds, sim_ds, time_steps=("00:00", "06:00", "12:00", "18:00")
 ):
     """
     Perform quantile mapping for each 6-hourly time step and rescale daily sums to 4 for all variables.
@@ -311,7 +307,11 @@ def quantile_mapping_rescale_all(
 
 
 def quantile_mapping_rescale_future(
-    obs_hist, sim_hist, sim_future, time_steps=("00:00", "06:00", "12:00", "18:00")
+    config,
+    obs_hist,
+    sim_hist,
+    sim_future,
+    time_steps=("00:00", "06:00", "12:00", "18:00"),
 ):
     """
     Apply quantile mapping corrections derived from historical data to future simulations,
@@ -653,7 +653,7 @@ def rescale_to_sum_one(ds):
 #     return corrected_ds
 
 
-def set_variables():
+def set_variables(config):
     """
     Set up parameters for bias correction, including thresholds, limits, and seasonal adjustments.
 
@@ -680,13 +680,13 @@ def set_variables():
     for i in range(
         itmp, 5, 1
     ):  # set irho matrix (bias correction options: 1-included and 0-excluded)
-        if correction_model == 1:
+        if config.correction_model == 1:
             irho[i, :] = [1, 0, 0, 0, 0]
-        if correction_model == 2:
+        if config.correction_model == 2:
             irho[i, :] = [1, 1, 0, 0, 0]
-        if correction_model == 3:
+        if config.correction_model == 3:
             irho[i, :] = [1, 1, 1, 0, 0]
-        if correction_model == 4:
+        if config.correction_model == 4:
             irho[i, :] = [1, 1, 1, 1, 0]
 
     isn = 4  # number of seasons in a year
@@ -709,10 +709,10 @@ def set_variables():
     isj = np.delete(isj, (0), axis=0)
 
     mx_th = np.zeros((1, 6), dtype=float)
-    for i in range(0, no_of_variables, 1):
-        b = [0, lower_limit[i], upper_limit[i], 0, 0, 0]
+    for i in range(0, config.no_of_variables, 1):
+        b = [0, config.lower_limit[i], config.upper_limit[i], 0, 0, 0]
         if config.bc_boundary != "lateral":
-            b = [0, lower_limit[-1], upper_limit[-1], 0, 0, 0]
+            b = [0, config.lower_limit[-1], config.upper_limit[-1], 0, 0, 0]
         mx_th = np.r_[mx_th, [b]]
     mx_th = np.delete(mx_th, (0), axis=0)
     phlwr, phupr, ilimit, thres = (
@@ -722,7 +722,7 @@ def set_variables():
         mx_th[:, 5],
     )
 
-    for i in range(0, no_of_variables, 1):
+    for i in range(0, config.no_of_variables, 1):
         if thres[i] == 0.0:
             thres[i] = 0.00000001
 
@@ -787,7 +787,7 @@ class BiasCorrectionParams:
         return BiasCorrectionParams(**data)
 
 
-def bc_correction_hist(gcm_reshape, obs_reshape):
+def bc_correction_hist(config, gcm_reshape, obs_reshape):
     """
     Perform bias correction on GCM data using observational data for historical period.
 
@@ -822,7 +822,17 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
 
     # ==========================================================================#
 
-    nout, leap, irho, isn, ij, isj, phlwr, phupr, ilimit, thres, idays = set_variables()
+    nout, leap, irho, isn, ij, isj, phlwr, phupr, ilimit, thres, idays = set_variables(
+        config
+    )
+
+    correction_model = config.correction_model
+    startyear_h = config.startyear_h
+    endyear_h = config.endyear_h
+    no_of_iterations = config.no_of_iterations
+    no_of_variables = config.no_of_variables
+    startyear_h = config.startyear_h
+    bc_boundary = config.bc_boundary
 
     # Exclude specific humidity if the first element of the GCM data is less than 0.1
     # to avoid unexpected values during the bias correction process
@@ -849,7 +859,7 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
     else:
         newvar = nvar
     # nday=np.zeros([constants.monmax,])
-    nday = mbc.day()
+    nday = mbc.day(12)
     rem = np.zeros([no_of_variables, nycur, 12])
     res = np.zeros([no_of_variables, nycur, 4])
     rey = np.zeros([no_of_variables, nycur])
@@ -898,43 +908,6 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
 
     inx = 0
 
-    # ==========================================================================#
-    ######## calculate daily, monthly, seasonal, annual stats of obs ########
-    # avdh, sddh, cordh = mbc.sdsmooth(obs_reshape, moving_window, nday,
-    #                                 nsc, 3, leap, idays, missing_value)
-    avdh, sddh, cordh = mbc.sdsmooth(
-        obs_reshape, moving_window, nday, nsc, 3, leap, idays, missing_value
-    )
-    # cobs,dobs = c_g_corl_daily(atm,iband,nday,ns,ilpg,leap,idays,inx,miss,[nvar,ny,nout])
-    # c_g_corl_daily(atm,cobs,dobs,iband,nvar,nday,ny,ns,ilpg,leap,idays,inx,miss,nout
-    cobs, dobs = mbc.c_g_corl_daily(
-        obs_reshape, moving_window, nday, nsc, 3, leap, idays, inx, missing_value
-    )
-
-    # Find monthly means, sds and corl of reanalysis data
-    # avsds(atm,nvar,ny,av,sd,rho,nout)
-    avmh, sdmh, cormh = mbc.avsds(rem)
-
-    # Calculate matrices C and G
-    # c_g_corl_season(atm,nvar,ny,cobs,dobs,inx,nout)
-    cobsm, dobsm = mbc.c_g_corl_season(rem, inx)
-
-    # Find seasonal, sds and corl of reanalysis data
-    avsh, sdsh, corsh = mbc.avsds(res)
-
-    # Calculate matrices C and G
-    cobss, dobss = mbc.c_g_corl_season(res, inx)
-
-    # Find annual, sds and corl of reanalysis data
-    # avsdy(atm,nvar,ny,avy,sdy,rhoy)
-    avyh, sdyh, coryh = mbc.avsdy(rey)
-
-    # Calculate matrices C and G
-    # c_g_corl_year(atm,nvar,ny,cobs,dobs,inx)
-    cobsy, dobsy = mbc.c_g_corl_year(rey, inx)
-
-    inx = 2
-    # ==========================================================================#
     #
     # Loop structures
     nntr = no_of_iterations + 1
@@ -953,26 +926,72 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
     tprint = 0
     iss = 0
 
+    # ==========================================================================#
+    ######## calculate daily, monthly, seasonal, annual stats of obs ########
+    # avdh, sddh, cordh = mbc.sdsmooth(obs_reshape, moving_window, nday,
+    #                                 nsc, 3, leap, idays, missing_value)
+    avdh, sddh, cordh = mbc.sdsmooth(
+        obs_reshape, moving_window, nday, nsc, 3, leap, idays, missing_value
+    )
+    avdh, sddh, cordh = avdh[:nvar, :, :], sddh[:nvar, :, :], cordh[:nvar, :, :]
+    # Slice Fortran outputs (nvarmax-sized) down to actual variable count
+    # cobs,dobs = c_g_corl_daily(atm,iband,nday,ns,ilpg,leap,idays,inx,miss,[nvar,ny,nout])
+    # c_g_corl_daily(atm,cobs,dobs,iband,nvar,nday,ny,ns,ilpg,leap,idays,inx,miss,nout
+    cobs, dobs = mbc.c_g_corl_daily(
+        obs_reshape, moving_window, nday, nsc, 3, leap, idays, inx, missing_value
+    )
+    cobs, dobs = cobs[:, :, :nvar, :nvar], dobs[:, :, :nvar, :nvar]
+
+    # Find monthly means, sds and corl of reanalysis data
+    # avsds(atm,nvar,ny,av,sd,rho,nout)
+    avmh, sdmh, cormh = mbc.avsds(rem)
+    avmh, sdmh, cormh = avmh[:nvar, :], sdmh[:nvar, :], cormh[:nvar, :]
+
+    # Calculate matrices C and G
+    # c_g_corl_season(atm,nvar,ny,cobs,dobs,inx,nout)
+    cobsm, dobsm = mbc.c_g_corl_season(rem, inx)
+    cobsm, dobsm = cobsm[:, :nvar, :nvar], dobsm[:, :nvar, :nvar]
+
+    # Find seasonal, sds and corl of reanalysis data
+    avsh, sdsh, corsh = mbc.avsds(res)
+    avsh, sdsh, corsh = avsh[:nvar, :nss], sdsh[:nvar, :nss], corsh[:nvar, :nss]
+
+    # Calculate matrices C and G
+    cobss, dobss = mbc.c_g_corl_season(res, inx)
+    cobss, dobss = cobss[:nss, :nvar, :nvar], dobss[:nss, :nvar, :nvar]
+
+    # Find annual, sds and corl of reanalysis data
+    # avsdy(atm,nvar,ny,avy,sdy,rhoy)
+    avyh, sdyh, coryh = mbc.avsdy(rey)
+    avyh, sdyh, coryh = avyh[:nvar], sdyh[:nvar], coryh[:nvar]
+
+    # Calculate matrices C and G
+    # c_g_corl_year(atm,nvar,ny,cobs,dobs,inx)
+    cobsy, dobsy = mbc.c_g_corl_year(rey, inx)
+    cobsy, dobsy = cobsy[:nvar, :nvar], dobsy[:nvar, :nvar]
+    inx = 2
+    # ==========================================================================#
+
     if tprint == 1:
         print("Start loop, first: boundary limits, next: correction")
 
     # Initialize arrays to avoid unbound local error
-    # day
-    avdc = np.zeros((nvar, 12, 31))
-    sddc = np.zeros((nvar, 12, 31))
-    cordc = np.zeros((nvar, 12, 31))
-    # month
-    avmc = np.zeros((nvar, 12))
-    sdmc = np.zeros((nvar, 12))
-    cormc = np.zeros((nvar, 12))
-    # season
-    avsc = np.zeros((nvar, nss))
-    sdsc = np.zeros((nvar, nss))
-    corsc = np.zeros((nvar, nss))
-    # year
-    avyc = np.zeros((nvar))
-    sdyc = np.zeros((nvar))
-    coryc = np.zeros((nvar))
+    # # day
+    # avdc = np.zeros((nvar, 12, 31))
+    # sddc = np.zeros((nvar, 12, 31))
+    # cordc = np.zeros((nvar, 12, 31))
+    # # month
+    # avmc = np.zeros((nvar, 12))
+    # sdmc = np.zeros((nvar, 12))
+    # cormc = np.zeros((nvar, 12))
+    # # season
+    # avsc = np.zeros((nvar, nss))
+    # sdsc = np.zeros((nvar, nss))
+    # corsc = np.zeros((nvar, nss))
+    # # year
+    # avyc = np.zeros((nvar))
+    # sdyc = np.zeros((nvar))
+    # coryc = np.zeros((nvar))
 
     # day
     avdc_iter = np.zeros((nntr, nvar, 12, 31))
@@ -1022,9 +1041,10 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
 
         # find smoothened mean and sd of daily gcm series
         if time_scale == 0 and jj == 0:  # historical and daily
-            avdc, sddc, cordc = mbc.sdsmooth(
+            avdc, sddc, _ = mbc.sdsmooth(
                 gd, moving_window, nday, nsc, 3, leap, idays, missing_value
             )
+            avdc, sddc = avdc[:nvar, :, :], sddc[:nvar, :, :]
 
         if itr == 0:
             # -------------------------------------------------------------------------
@@ -1046,7 +1066,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                 gmct = gm.copy()
 
                 # 2. Second Segment
-                avmc, sdmc, cormc = mbc.avsds(gm)  # Adjust the function call if needed
+                avmc, sdmc, _ = mbc.avsds(gm)  # Adjust the function call if needed
+                avmc, sdmc = avmc[:nvar, :, :], sdmc[:nvar, :, :]
 
                 # Save the current avmc and sdmc arrays to the larger array
                 avmc_iter[itr, :nvar, :] = avmc.copy()
@@ -1194,7 +1215,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                     idays,
                     missing_value,
                 )
-
+                avd, sddc = avd[:nvar, :, :], sddc[:nvar, :, :]
+                # Slice Fortran outputs (nvarmax-sized) down to actual variable count
                 sddc_iter[itr, :, :, :] = sddc.copy()
 
                 # Calculate fact
@@ -1257,7 +1279,7 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                     # correct for bias in corl
                     # find smoothened mean and sd of gcm mean and sd corrected series
                     # Translating the function call to sdsmooth
-                    avd, sdd, cord = mbc.sdsmooth(
+                    avd, sdd, _ = mbc.sdsmooth(
                         ggd,
                         moving_window,
                         nday,
@@ -1267,7 +1289,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                         idays,
                         missing_value,
                     )
-
+                    # Slice Fortran outputs (nvarmax-sized) down to actual variable count
+                    avd, sdd = avd[:newvar, :, :], sdd[:newvar, :, :]
                     # Conditional block for additional function call
                     cmod, gmod = mbc.c_g_corl_daily(
                         ggd,
@@ -1279,6 +1302,11 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                         idays,
                         2,
                         missing_value,
+                    )
+                    # Slice Fortran outputs (nvarmax-sized) down to actual variable count
+                    cmod, gmod = (
+                        cmod[:, :, :newvar, :newvar],
+                        gmod[:, :, :newvar, :newvar],
                     )
 
                     cmod_iter[itr, :, :, :, :] = cmod.copy()
@@ -1378,7 +1406,9 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                     print("Correcting for monthly mean", jj)
 
                 # find mean and sd of gcm monthly series, historical
-                avmc, sdmc, cormc = mbc.avsds(gm)
+                avmc, sdmc, _ = mbc.avsds(gm)
+                # Slice Fortran outputs (nvarmax-sized) down to actual variable count
+                avmc, sdmc = avmc[:nvar, :], sdmc[:nvar, :]
 
                 avmc_iter[itr, :, :] = avmc.copy()
 
@@ -1414,7 +1444,7 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
 
                 # find mean and sd of gcm mean corrected monthly series, historical
                 avm, sdmc, _ = mbc.avsds(ggm)
-
+                avm, sdmc = avm[:nvar, :], sdmc[:nvar, :]
                 sdmc_iter[itr, :, :] = sdmc.copy()
 
                 # Calculate fact
@@ -1462,10 +1492,13 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                         print("Correcting for monthly corrl", jj)
 
                     avm, sdm, _ = mbc.avsds(ggm)
-
+                    avm, sdm = avm[:newvar, :], sdm[:newvar, :]
                     # Conditional block for additional function call
                     cmodm, gmodm = mbc.c_g_corl_season(ggm, inx)
-
+                    cmodm, gmodm = (
+                        cmodm[:, :newvar, :newvar],
+                        gmodm[:, :newvar, :newvar],
+                    )
                     cmodm_iter[itr, :, :, :] = cmodm.copy()
                     gmodm_iter[itr, :, :, :] = gmodm.copy()
 
@@ -1543,8 +1576,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                 if tprint == 1 and itr > 0:
                     print("Correcting for seasonal mean", jj)
 
-                avsc, sdsc, corsc = mbc.avsds(gs)
-
+                avsc, sdsc, _ = mbc.avsds(gs)
+                avsc, sdsc = avsc[:nvar, :nss], sdsc[:nvar, :nss]
                 avsc_iter[itr, :, :] = avsc.copy()
 
                 # Calculate new values for ggm
@@ -1565,8 +1598,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                 if tprint == 1:
                     print("Correcting for seasonal mean and standard deviation", jj)
 
-                avs, sdsc, corsc = mbc.avsds(ggs)
-
+                avs, sdsc, _ = mbc.avsds(ggs)
+                avs, sdsc = avs[:nvar, :nss], sdsc[:nvar, :nss]
                 sdsc_iter[itr, :, :] = sdsc.copy()
 
                 # Calculate fact
@@ -1600,11 +1633,14 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                     if tprint == 1 and itr > 0:
                         print("Correcting for seasonal corrl", jj)
 
-                    avs, sds, cors = mbc.avsds(ggs)
-
+                    avs, sds, _ = mbc.avsds(ggs)
+                    avs, sds = avs[:newvar, :], sds[:newvar, :]
                     # Conditional block for additional function call
                     cmods, gmods = mbc.c_g_corl_season(ggs, inx)
-
+                    cmods, gmods = (
+                        cmods[:nss, :newvar, :newvar],
+                        gmods[:nss, :newvar, :newvar],
+                    )
                     cmods_iter[itr, :, :, :] = cmods.copy()
                     gmods_iter[itr, :, :, :] = gmods.copy()
 
@@ -1676,8 +1712,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                 if tprint == 1 and itr > 0:
                     print("Correcting for annual mean", jj)
 
-                avyc, sdsy, coryc = mbc.avsdy(gy)
-
+                avyc, _, _ = mbc.avsdy(gy)
+                avyc = avyc[:nvar]
                 avyc_iter[itr, :] = avyc.copy()
 
                 # Calculate new values for ggy
@@ -1698,8 +1734,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                 if tprint == 1:
                     print("Correcting for annual mean and standard deviation", jj)
 
-                avy, sdyc, coryc = mbc.avsdy(ggy)
-
+                avy, sdyc, _ = mbc.avsdy(ggy)
+                avy, sdyc = avy[:nvar], sdyc[:nvar]
                 sdyc_iter[itr, :] = sdyc.copy()
 
                 # Calculate fact
@@ -1734,7 +1770,8 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                     if tprint == 1 and itr > 0:
                         print("Correcting for annual corrl", jj)
 
-                    avy, sdy, cory = mbc.avsdy(ggy)
+                    avy, sdy, _ = mbc.avsdy(ggy)
+                    avy, sdy = avy[:newvar], sdy[:newvar]
                     if np.min(sdyh) < 0.01 and config.bc_boundary == "lateral":
                         # print(
                         #     "Exit annual corrl itr as obs std is lower then 1, calibration, jj",
@@ -1747,7 +1784,7 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
                         # print("Correcting for annual corrl", jj)
                         # Conditional block for additional function call
                         cmody, gmody = mbc.c_g_corl_year(ggy, 2)
-
+                        cmody, gmody = cmody[:newvar, :newvar], gmody[:newvar, :newvar]
                         cmody_iter[itr, :, :] = cmody.copy()
                         gmody_iter[itr, :, :] = gmody.copy()
 
@@ -1908,7 +1945,7 @@ def bc_correction_hist(gcm_reshape, obs_reshape):
     return {"gcmc": gcmc, "bc_params": bc_params}
 
 
-def bc_correction_future(gcm_reshape, bc_params):
+def bc_correction_future(config, gcm_reshape, bc_params):
     """
     Perform bias correction for future climate data.
 
@@ -1919,24 +1956,48 @@ def bc_correction_future(gcm_reshape, bc_params):
         endyear_f (int): End year of the future climate data.
 
     Returns:
-        None: The bias-corrected GCM data is updated in-place.
-
-    Workflow:
-        1. Set variables using the `set_variables` function.
-        2. Initialize some variables and arrays.
-        3. Loop over iterations.
-            a. If it's the first iteration, perform boundary limits and correction.
-            b. If it's not the first iteration, perform correction based on daily mean and standard deviation.
-        4. Perform bias correction for daily mean and standard deviation.
+        dict: A dictionary containing corrected GCM data and bias correction parameters.
     """
 
+    # Workflow:
+    # The function is designed to be invoked after assign_w and
+    # extract_and_reshape functions have processed the original 3D and 2D climate data
+    # from GCM and observational sources.
+
+    # The idays, isn, ij, and isj parameters are used for subsetting the data
+    # according to different seasons and months.
+
+    # The phlwr and phupr parameters set the lower and upper limits for bias correction.
+    # Any values outside these limits might be adjusted or flagged.
+
+    # The irho matrix controls the type of bias correction to be applied,
+    # supporting multiple models.
+
+    # The function performs the bias correction on gcm_reshape using obs_reshape
+    # as a reference and returns the corrected data,
+    # usually for further analysis or to be written back to a NetCDF file.
+
+    # The function is intended to operate within a framework where its settings and
+    # prerequisites are provided by modules like user_input and others.
+
     # ==========================================================================#
-    nout, leap, irho, isn, ij, isj, phlwr, phupr, ilimit, thres, idays = set_variables()
-    # ==========================================================================#
+
+    nout, leap, irho, isn, ij, isj, phlwr, phupr, ilimit, thres, idays = set_variables(
+        config
+    )
+
+    correction_model = config.correction_model
+    no_of_iterations = config.no_of_iterations
+    no_of_variables = config.no_of_variables
+    bc_boundary = config.bc_boundary
+    startyear_f = config.startyear_f
+    endyear_f = config.endyear_f
+
     # Exclude specific humidity if the first element of the GCM data is less than 0.1
     # to avoid unexpected values during the bias correction process
     nvar = no_of_variables
-    newvar = nvar
+    newvar = nvar  # for high-level humidity exclusion
+
     if bc_boundary == "lateral":
         if correction_model == 4 and np.max(gcm_reshape[2, :, :, :]) < 0.1:
             print("Exclude specific humidity below the lower threshold (1*10-4).")
@@ -1954,7 +2015,7 @@ def bc_correction_future(gcm_reshape, bc_params):
                 irho[i, :] = [1, 1, 1, 0, 0]
 
     # nsc = startyear_f - 1
-    nday = mbc.day()
+    nday = mbc.day(12)
 
     phll = np.zeros([10, no_of_variables])
     phul = np.zeros([10, no_of_variables])
@@ -2189,7 +2250,7 @@ def bc_correction_future(gcm_reshape, bc_params):
                 avd, _, _ = mbc.sdsmooth(
                     ggd, moving_window, nday, nsgc, 3, leap, idays, missing_value
                 )
-
+                avd = avd[:nvar, :, :]
                 # Calculate fact
                 non_zero_mask = bc_params.sddc_iter[itr, :, :, :] > 1e-10
                 fact = np.ones_like(bc_params.sddc_iter[itr, :, :, :])
@@ -2266,7 +2327,7 @@ def bc_correction_future(gcm_reshape, bc_params):
                         idays,
                         missing_value,
                     )
-
+                    avd, sdd = avd[:newvar, :, :], sdd[:newvar, :, :]
                     # # Calculate fact
                     # non_zero_mask = sdd > 1e-10
                     # fact = np.ones_like(sdd)
@@ -2401,7 +2462,7 @@ def bc_correction_future(gcm_reshape, bc_params):
 
                 # future
                 avm, _, _ = mbc.avsds(ggm)
-
+                avm = avm[:nvar, :]
                 # Calculate fact
                 non_zero_mask = bc_params.sdmc_iter[itr, :, :] > 1e-10
                 fact = np.ones_like(bc_params.sdmc_iter[itr, :, :])
@@ -2453,7 +2514,7 @@ def bc_correction_future(gcm_reshape, bc_params):
                         print("Correcting for monthly corrl", jj)
 
                     avm, sdm, _ = mbc.avsds(ggm)
-
+                    avm, sdm = avm[:newvar, :], sdm[:newvar, :]
                     # # Calculate fact
                     # non_zero_mask = sdm > 1e-10
                     # fact = np.ones_like(sdm)
@@ -2549,7 +2610,7 @@ def bc_correction_future(gcm_reshape, bc_params):
                     print("Correcting for seasonal mean and standard deviation", jj)
 
                 avs, _, _ = mbc.avsds(ggs)
-
+                avs = avs[:nvar, :]
                 # Calculate fact
                 non_zero_mask = bc_params.sdsc_iter[itr, :, :] > 1e-10
                 fact = np.ones_like(bc_params.sdsc_iter[itr, :, :])
@@ -2588,7 +2649,7 @@ def bc_correction_future(gcm_reshape, bc_params):
                         print("Correcting for seasonal corrl", jj)
 
                     avs, sds, _ = mbc.avsds(ggs)
-
+                    avs, sds = avs[:newvar, :], sds[:newvar, :]
                     # # Calculate fact
                     # non_zero_mask = sds > 1e-10
                     # fact = np.ones_like(sds)
@@ -2678,7 +2739,7 @@ def bc_correction_future(gcm_reshape, bc_params):
                     print("Correcting for annual mean and standard deviation", jj)
 
                 avy, _, _ = mbc.avsdy(ggy)
-
+                avy = avy[:nvar]
                 # Calculate fact
                 non_zero_mask = bc_params.sdyc_iter[itr, :] > 1e-10
                 fact = np.ones_like(bc_params.sdyc_iter[itr, :])
@@ -2716,6 +2777,7 @@ def bc_correction_future(gcm_reshape, bc_params):
                         print("Correcting for annual corrl", jj)
 
                     avy, sdy, _ = mbc.avsdy(ggy)
+                    avy, sdy = avy[:newvar], sdy[:newvar]
                     if (
                         np.min(bc_params.sdyh) < 0.01
                         and config.bc_boundary == "lateral"

@@ -29,10 +29,10 @@
 
 # =============== Input for bias correction =========================
 # File path -------------------------------------------------
-bc_hist_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1/6hrLev" # path to the data for historical bias correction
-bc_future_path: "/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp370/r6i1p1f1/6hrLev" # path to the data for future bias correction
-obs_path: "/g/data/w28/yk8692/input/era5/access_esm" # observation data path
-out_path: "/g/data/w28/yk8692/tests/access/calibration/" # path to save the output
+bc_hist_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2/6hrLev" # path to the data for historical bias correction
+bc_future_path: "/g/data/oi10/replicas/CMIP6/ScenarioMIP/CNRM-CERFACS/CNRM-CM6-1/ssp370/r1i1p1f2/6hrLev" # path to the data for future bias correction
+obs_path: "/g/data/w28/yk8692/input/era5/cnrm" # observation data path
+out_path: "/g/data/w28/yk8692/tests/calibration/cnrm_test" # path to save the output
 
 # Simulation periods, historical -----------------------------------
 bc_hist: True # Yes: True, No: False
@@ -41,14 +41,14 @@ endyear_h: 1989 # end year for historical simulation
 
 # GCM information
 infor: "6hrLev" # 6hrLev for 3d, Oday for 2D
-gname: "ACCESS-ESM1-5" # GCM name
+gname: "CNRM-CM6-1" # GCM name
 period: "historical" # historical, validation, or future
-cinfor: "r6i1p1f1"
+cinfor: "r1i1p1f2"
 sinfor: "gn"
-version: "20200529"
+version: "20180917"
 
 # Simulation periods, future -----------------------------------
-bc_future: True # Yes: True, No: False
+bc_future: False # Yes: True, No: False
 startyear_f: 1990 # start year for future simulation
 endyear_f: 2020 # end year for future simulation
 

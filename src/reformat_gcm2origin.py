@@ -32,12 +32,17 @@ import argparse
 # -----------------------------------------------------------------------------------------------------------------
 # Load pacakges ===================================
 import glob
+import json
 import os
 import re
 from functools import partial
+from pathlib import Path  # added
 
+import dask  # type: ignore  # added
+import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
 import xarray as xr  # type: ignore
+import yaml  # type: ignore  # added
 from cdo import Cdo  # type: ignore
 from dask.distributed import Client  # type: ignore
 
@@ -45,65 +50,86 @@ from config import config
 from interpolation import regrid
 
 cdo = Cdo()
+# Mitigate HDF5 file locking issues on shared filesystems before any IO libs import
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 # Load pacakges end ================================
 # ---------------------------------------------------------------------------------------------------
 # Functions to be used for main_reformat
 
 
 # Start of the script -----------------------------------------------------
-def setup_client(n_workers=None, threads_per_worker=None):
+def load_config(yaml_path):
     """
-    Set up Dask client for parallel processing, allowing customization of workers and threads.
+    Load configuration from a YAML file.
 
     Args:
-        n_workers (int): Number of workers to use.
-        threads_per_worker (int): Number of threads per worker.
+        yaml_path (str): Path to the YAML configuration file.
 
     Returns:
-        Client: A Dask distributed client instance.
+        Config: Configuration object with loaded settings.
     """
+    with open(yaml_path, "r") as file:
+        config_data = yaml.safe_load(file)
+    # return Config(**config_data)
+    return config_data
 
-    if n_workers is None or threads_per_worker is None:
-        c = Client()
-    else:
-        c = Client(n_workers=n_workers, threads_per_worker=threads_per_worker)
-    print("Dask client setup complete.")
-    return c
+
+def setup_client(ncpus, mem_gb):
+    """
+    Dynamically set up a Dask client based on available CPUs and memory.
+    """
+    # Set threads per worker (try to keep under 8 for memory balance)
+    threads_per_worker = min(ncpus, 8)
+    n_workers = max(1, ncpus // threads_per_worker)
+    mem_per_worker = int(mem_gb / n_workers)
+
+    print(
+        f"[INFO] Starting Dask client: {n_workers} workers × {threads_per_worker} threads"
+    )
+    print(f"[INFO] Each worker memory limit: {mem_per_worker}GB")
+
+    return Client(
+        n_workers=n_workers,
+        threads_per_worker=threads_per_worker,
+        memory_limit=f"{mem_per_worker}GB",
+    )
 
 
 def parse_arguments():
     """
-    Parse command-line arguments for running atmospheric data interpolation.
+    Parse command-line arguments.
 
     Returns:
-        argparse.Namespace: Parsed arguments including configuration file path, variable names,
-        start year, and end year.
+        argparse.Namespace: Parsed arguments.
     """
-
-    parser = argparse.ArgumentParser(description="Run atmospheric data interpolation.")
+    parser = argparse.ArgumentParser(description="Run reformatting.")
     parser.add_argument(
-        "--config",
+        "--yp",
         type=str,
         default="./user_input_test.yaml",
         help="Path to the YAML configuration file.",
     )
-    parser.add_argument(
-        "--var",
-        type=str,
-        default=["hus", "ta", "ua", "va"],
-        help="Path to the YAML configuration file.",
-    )
-    # parser.add_argument(
-    #     "--nc",
-    #     type=int,
-    #     default=48,
-    #     help="Number of cores to use.",
-    # )
 
-    parser.add_argument("--sy", type=int, default=1982, help="Start year.")
-    parser.add_argument("--ey", type=int, default=2012, help="End year.")
+    parser.add_argument("--ncpus", type=int, default=None)
+    parser.add_argument("--mem", type=int, default=None)
 
     return parser.parse_args()
+
+
+def infer_cmip6_ids_from_path(path):
+    """
+    Infer (activity, institution, source_id) from a CMIP6 path.
+    Example: /g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/...
+    """
+    parts = Path(path).parts
+    try:
+        i = parts.index("CMIP6")
+    except ValueError:
+        return None, None, None
+    # Need .../CMIP6/<activity>/<institution>/<source_id>/...
+    if len(parts) > i + 3:
+        return parts[i + 1], parts[i + 2], parts[i + 3]
+    return None, None, None
 
 
 def add_lev_dim(new):
@@ -148,8 +174,8 @@ def copyenv(new, old, vn, vo):
     new[vn].attrs = old[vo].attrs
     new[vn].encoding = {**old[vo].encoding, "_FillValue": None}
 
-    # Add level dimension if not sea surface temperature
-    if vn != "tos" or "sst":
+    # Add level dimension if not sea surface temperature variables
+    if vn not in ["tos", "sst"] and "lev" in old:
         new["lev"] = old["lev"]
         new["lev"].attrs = old["lev"].attrs
         new["lev"].encoding = {**old["lev"].encoding, "_FillValue": None}
@@ -158,6 +184,251 @@ def copyenv(new, old, vn, vo):
     new.attrs = old.attrs
 
     return new
+
+
+def get_vertical_dim_name(obj):
+    """Return the name of the vertical dimension, supporting a few common aliases.
+    Falls back to 'lev' if present, else returns None when not found.
+    """
+    candidates = ("lev", "level", "plev", "pressure", "height")
+    dims = getattr(obj, "dims", {})
+    for name in candidates:
+        if name in dims:
+            return name
+    # also check coords if needed
+    coords = getattr(obj, "coords", {})
+    for name in candidates:
+        if name in coords:
+            return name
+    return None
+
+
+def align_vertical_to_target(da_bc, target_levels, vdim):
+    """Interpolate or assign bc dataarray vertical coordinate to match target_levels.
+
+    - If da_bc already has matching vdim and equal values, just return.
+    - Else, if vdim present, use linear interpolation to target_levels.
+    - Else, simply assign the target_levels as a new coordinate (expects broadcasting to work).
+    """
+    if vdim is None:
+        # cannot detect a vertical dimension, just return as-is
+        return da_bc
+    if vdim in da_bc.dims:
+        try:
+            src = da_bc[vdim]
+            # if equal, just reassign coords to ensure identity
+            if src.size == target_levels.size and xr.DataArray(src).identical(
+                target_levels
+            ):
+                return da_bc.assign_coords({vdim: target_levels})
+        except Exception:
+            pass
+        # interpolate along vdim
+        try:
+            return da_bc.interp({vdim: target_levels}, method="linear")
+        except Exception:
+            # as a fallback, just assign coords (may raise on shape mismatch later)
+            return da_bc.assign_coords({vdim: target_levels})
+    else:
+        # no such dim in data, just assign coords
+        return da_bc.assign_coords({vdim: target_levels})
+
+
+# -------------------------
+# Discovery helpers for CMIP6
+# -------------------------
+
+# Default search roots: most GCMs in oi10, ACCESS in fs38
+DEFAULT_ARCHIVE_ROOTS = [
+    "/g/data/oi10/replicas/CMIP6",
+    "/g/data/fs38/publications/CMIP6",
+]
+
+# Minimal variable->table mapping; can be extended/overridden by user config
+VAR_TO_TABLE_DEFAULT = {
+    # 3D 6-hourly
+    "hus": "6hrLev",
+    "ta": "6hrLev",
+    "ua": "6hrLev",
+    "va": "6hrLev",
+    # common 2D
+    "tos": "Oday",  # daily SST often under Oday (ocean daily)
+}
+
+
+def discover_cmip6_files(
+    variable,
+    activity,
+    institution,
+    source_id,
+    experiment,
+    variant,
+    table_id=None,
+    grid_label=None,
+    version=None,
+    year=None,
+    roots=None,
+):
+    """Discover CMIP6 file paths by pattern under one or more archive roots.
+
+    Path pattern (LLNL style):
+      <root>/<activity>/<institution>/<source_id>/<experiment>/<variant>/<table>/<variable>/<grid_label>/<version>/<filename>.nc
+
+    Only required arguments are the CMIP6 identifiers. 'table_id' will be
+    guessed from a minimal mapping if omitted.
+    """
+    roots = roots or DEFAULT_ARCHIVE_ROOTS
+    table = table_id or VAR_TO_TABLE_DEFAULT.get(variable, "*")
+    grid_part = grid_label or "*"
+    ver_part = version or "v*"
+
+    results = []
+    for root in roots:
+        base = os.path.join(
+            root,
+            activity,
+            institution,
+            source_id,
+            experiment,
+            variant,
+            table,
+            variable,
+            grid_part,
+            ver_part,
+        )
+        # Filename pattern, include year if provided to limit matches
+        fname = f"{variable}_{table}_{source_id}_{experiment}_{variant}_{grid_part}_"
+        if year is not None:
+            pattern = os.path.join(base, f"{fname}{year}*.nc")
+        else:
+            pattern = os.path.join(base, f"{fname}*.nc")
+        matches = sorted(glob.glob(pattern))
+        results.extend(matches)
+    return sorted(set(results))
+
+
+def get_archive_roots_user(config_module=None):
+    """Return archive roots with user overrides.
+
+    Order of precedence:
+      1) config.archive_roots (list[str]) if present
+      2) env CMIP6_ARCHIVE_ROOTS (comma-separated)
+      3) DEFAULT_ARCHIVE_ROOTS
+    """
+    # config override
+    roots = None
+    if config_module is not None and hasattr(config_module, "archive_roots"):
+        roots = getattr(config_module, "archive_roots")
+    if roots:
+        return list(roots)
+    # env override
+    env_val = os.environ.get("CMIP6_ARCHIVE_ROOTS")
+    if env_val:
+        parts = [p.strip() for p in env_val.split(",") if p.strip()]
+        if parts:
+            return parts
+    return DEFAULT_ARCHIVE_ROOTS
+
+
+def get_var_to_table_user(config_module=None):
+    """Return variable->table mapping with user overrides.
+
+    Order of precedence:
+      1) config.var_to_table (dict)
+      2) env CMIP6_VAR_TO_TABLE_JSON (JSON string)
+      3) VAR_TO_TABLE_DEFAULT
+    """
+    mapping = None
+    if config_module is not None and hasattr(config_module, "var_to_table"):
+        try:
+            user_map = dict(getattr(config_module, "var_to_table"))
+            return {**VAR_TO_TABLE_DEFAULT, **user_map}
+        except Exception:
+            pass
+    env_val = os.environ.get("CMIP6_VAR_TO_TABLE_JSON")
+    if env_val:
+        try:
+            user_map = json.loads(env_val)
+            if isinstance(user_map, dict):
+                return {**VAR_TO_TABLE_DEFAULT, **user_map}
+        except Exception:
+            pass
+    return VAR_TO_TABLE_DEFAULT
+
+
+def build_manifest(
+    variables,
+    activity,
+    institution,
+    source_by_exp,
+    variant,
+    grid_label=None,
+    version=None,
+    years=None,
+    roots=None,
+    var_to_table=None,
+):
+    """Build a manifest dict of discovered files per variable and year.
+
+    source_by_exp: dict mapping experiment -> source_id (e.g., {"historical":"ACCESS-ESM1-5","ssp370":"ACCESS-ESM1-5"}
+    years: iterable of years to search (optional). If None, searches all years.
+    var_to_table: optional mapping to override VAR_TO_TABLE_DEFAULT.
+    """
+    # If mapping not given, pick up user overrides from config module
+    if var_to_table is None:
+        try:
+            from config import config as _cfg  # local import to avoid cycles
+        except Exception:
+            _cfg = None
+        var_to_table = get_var_to_table_user(_cfg)
+    else:
+        var_to_table = {**VAR_TO_TABLE_DEFAULT, **(var_to_table or {})}
+    # If roots not given, get user overrides
+    if roots is None:
+        try:
+            from config import config as _cfg2
+        except Exception:
+            _cfg2 = None
+        roots = get_archive_roots_user(_cfg2)
+    manifest = {}
+    for var in variables:
+        table = var_to_table.get(var, None)
+        manifest[var] = {}
+        for experiment, source_id in source_by_exp.items():
+            key = f"{experiment}:{source_id}"
+            manifest[var][key] = {}
+            if years is None:
+                files = discover_cmip6_files(
+                    var,
+                    activity,
+                    institution,
+                    source_id,
+                    experiment,
+                    variant,
+                    table_id=table,
+                    grid_label=grid_label,
+                    version=version,
+                    year=None,
+                    roots=roots,
+                )
+                manifest[var][key]["all"] = files
+            else:
+                for y in years:
+                    files = discover_cmip6_files(
+                        var,
+                        activity,
+                        institution,
+                        source_id,
+                        experiment,
+                        variant,
+                        table_id=table,
+                        grid_label=grid_label,
+                        version=version,
+                        year=y,
+                        roots=roots,
+                    )
+                    manifest[var][key][str(y)] = files
+    return manifest
 
 
 def extract_time_range(filename):
@@ -186,141 +457,120 @@ def extract_time_range(filename):
 
 def reformatsave_3d(bcf, var_new, var_old, y, input_files, out_path):
     """
-    Reformat and save a 3D variable from bias-corrected data.
+    Reformat and save a 3D variable from bias-corrected data, per original file.
 
-    Args:
-        bcf (xarray.Dataset): Bias-corrected GCM data over the research periods.
-        var_new (str): New variable name for bias-corrected data.
-        var_old (str): Original GCM variable name.
-        y (int): The current year being processed.
-        input_files (list): List of input file paths for the given year.
-        out_path (str): Output path to save the netCDF files.
+    Strategy: for each original GCM file, open it as the template, find the
+    intersection of its time coordinate with the bias-corrected dataset, align
+    vertical coordinates and lat/lon (regrid for winds if needed), and replace
+    the values for the overlapping times and spatial subset. Save one output per
+    original input file, preserving the original filename inside out_path.
 
-    Returns:
-        list of tuples: Each tuple contains the reformatted dataset and its corresponding output filename.
+    Returns: list[(xarray.Dataset, output_path)] for audit; files are not written here.
     """
 
-    # Open and concatenate datasets
-    esmf = xr.open_mfdataset(input_files, combine="by_coords")
-
-    # Extract time ranges
-    time_ranges = [extract_time_range(fp) for fp in input_files]
-
-    # Rename variable's name if necessary
-    bcf_rn = bcf.rename({var_new: var_old})
-
-    # Initialize list to store the results
     results = []
+    # Rename variable in bc dataset to match original, if needed
+    bcf_rn = bcf if var_new == var_old else bcf.rename({var_new: var_old})
 
-    for start_time, end_time in time_ranges:
-        # Determine the appropriate slice
-        if y == config.endyear_h:  # Last year concatenate
-            xr_conf = xr.concat(
-                [bcf_rn[var_old], esmf[var_old].isel(time=slice(-1, None))], dim="time"
+    for fp in input_files:
+        # Open template (single file) to avoid cross-file concat issues
+        ds_tmpl = xr.open_dataset(fp)
+
+        # Identify vertical dimension name
+        vdim = get_vertical_dim_name(ds_tmpl[var_old])
+
+        # Determine overlapping times
+        if "time" not in ds_tmpl.coords or "time" not in bcf_rn.coords:
+            ds_tmpl.close()
+            continue
+        times_in = pd.to_datetime(ds_tmpl.time.values)
+        times_bc = pd.to_datetime(bcf_rn.time.values)
+        common = np.intersect1d(times_in, times_bc)
+        if common.size == 0:
+            # Nothing to replace in this file
+            ds_tmpl.close()
+            continue
+
+        # Select overlapping time slices
+        bc_slice = bcf_rn[var_old].sel(time=common)
+
+        # Align vertical levels to template
+        if vdim is not None and vdim in ds_tmpl:
+            bc_slice = align_vertical_to_target(bc_slice, ds_tmpl[vdim], vdim)
+
+        # Ensure canonical order
+        desired_order = [
+            d
+            for d in ("time", vdim, "lat", "lon")
+            if d is not None and d in bc_slice.dims
+        ]
+        bc_slice = bc_slice.transpose(*desired_order)
+
+        # Spatial subset and regrid if necessary (winds often require exact grid match)
+        tmpl_var = ds_tmpl[var_old]
+        # If lat/lon mismatch, regrid bias-corrected slice to template grid for winds
+        if var_old in ["ua", "va"] and (
+            not bc_slice.lat.identical(tmpl_var.lat)
+            or not bc_slice.lon.identical(tmpl_var.lon)
+        ):
+            print(
+                f"Regridding {var_old} slice to match original grid for file {os.path.basename(fp)}"
             )
-            start_time_full = f"{start_time[:4]}-{start_time[4:6]}-{start_time[6:8]} {start_time[8:10]}:{start_time[10:12]}"
-            end_time_full = f"{end_time[:4]}-{end_time[4:6]}-{end_time[6:8]} {end_time[8:10]}:{end_time[10:12]}"
-            bcf_sel = xr_conf.sel(time=slice(start_time_full, end_time_full))
-
-        elif y == config.startyear_h - 1:  # Previous year concatenate
-            bcf_1 = bcf.isel(time=slice(None, 1))  # Exclude first time step, mbcf
-            bcf_rn = bcf_1.rename({var_new: var_old})
-            start_time_full = f"{start_time[:4]}-{start_time[4:6]}-{start_time[6:8]} {start_time[8:10]}:{start_time[10:12]}"
-            end_time_full = f"{end_time[:4]}-{end_time[4:6]}-{end_time[6:8]} {end_time[8:10]}:{end_time[10:12]}"
-            bcf_sel = xr.concat(
-                [
-                    esmf[var_old].sel(time=slice(start_time_full, end_time_full)),
-                    bcf_rn[var_old],
-                ],
-                dim="time",
+            rename_dict_reformat = {var_old: var_old}
+            weight_path_reformat = os.path.join(
+                out_path, f"weight_{config.gname}_{var_old}_reformat.nc"
             )
+            bc_slice = regrid(
+                bc_slice.to_dataset(name=var_old),
+                tmpl_var.to_dataset(name=var_old),
+                "bilinear",
+                weight_path_reformat,
+                rename_dict_reformat,
+            )[var_old]
 
-        else:
-            start_time_full = f"{start_time[:4]}-{start_time[4:6]}-{start_time[6:8]} {start_time[8:10]}:{start_time[10:12]}"
-            end_time_full = f"{end_time[:4]}-{end_time[4:6]}-{end_time[6:8]} {end_time[8:10]}:{end_time[10:12]}"
-            bcf_sel = bcf_rn.sel(time=slice(start_time_full, end_time_full))
+        # Load template variable lazily, then replace values at common times
+        # Target indexers
+        indexer = {"time": common}
+        if vdim is not None and vdim in tmpl_var.dims:
+            indexer[vdim] = ds_tmpl[vdim]
+        indexer["lat"] = tmpl_var.lat
+        indexer["lon"] = tmpl_var.lon
 
-        # Transpose dimensions
-        bcf_sel = bcf_sel.transpose("time", "lev", "lat", "lon")
+        # Ensure bc_slice matches indexer dims
+        for d in list(indexer.keys()):
+            if d not in bc_slice.dims:
+                # try to expand (e.g., if vdim missing after interpolation failure)
+                bc_slice = bc_slice.expand_dims({d: indexer[d]})
 
-        # Regrid to consider if
-        sliced_esmf = (
-            esmf[var_old]
-            .sel(
-                lat=slice(config.lat_min, config.lat_max),
-                lon=slice(config.lon_min, config.lon_max),
-            )
-            .chunk({"time": -1, "lev": -1, "lat": -1, "lon": -1})
-        )
+        # Perform replacement
+        data_var = tmpl_var.load()
+        data_var.loc[indexer] = bc_slice.values
+        data_var.attrs["history"] = "Bias-corrected and reformatted data"
+        ds_tmpl[var_old] = data_var
 
-        # Regrid to consider if
-        if var_old in ["ua", "va"]:
-            if not bcf_sel.lat.equals(sliced_esmf.lat) or not bcf_sel.lon.equals(
-                sliced_esmf.lon
-            ):
-                bcf_sel["lev"] = sliced_esmf.lev
-                print(
-                    f"{var_old} has cooridnates not the same with the original needed to be regridded"
-                )
+        # Clean encodings for known bound/meta variables to avoid fill value issues
+        encoding_vars = ["lev_bnds", "b", "orog", "b_bnds", "lat_bnds", "lon_bnds"]
+        for v in encoding_vars:
+            if v in ds_tmpl.variables:
+                ds_tmpl[v].encoding["_FillValue"] = None
 
-                method = "bilinear"
-                rename_dict_reformat = {var_new: var_old}
-                weight_path_reformat = (
-                    f"{output_path}/weight_{config.gname}_{var_old}_reformat.nc"
-                )
-                bcf_sel = regrid(
-                    bcf_sel,
-                    sliced_esmf,
-                    method,
-                    weight_path_reformat,
-                    rename_dict_reformat,
-                )
-
-        # Convert the entire variable to a NumPy array
-        esmf_data = esmf[var_old].load()
-
-        # Update the values in the original dataset for the subset region
-        esmf_data.loc[
-            dict(
-                time=bcf_sel.time,
-                lev=esmf_data.lev,
-                lat=bcf_sel.lat,
-                lon=bcf_sel.lon,
-            )
-        ] = bcf_sel[var_old].values
-
-        # Set attributes
-        esmf_data.attrs["history"] = "Bias-corrected and reformatted data"
-
-        # Assign the updated data back to the original dataset
-        esmf[var_old] = esmf_data
-
-        # None encoding for specific variables
-        encoding_vars = ["lev_bnds", "b", "orog", "b_bnds"]
-        if var_old != "va":
-            encoding_vars.extend(["lat_bnds", "lon_bnds"])
-
-        for var in encoding_vars:
-            if var in esmf.variables:
-                esmf[var].encoding["_FillValue"] = None
-
-        # Determine the output filename
-        output_filename = os.path.basename(input_files[0])
-        output_path = os.path.join(out_path, output_filename)
-
-        # Append the dataset and filename to results
-        results.append((esmf, output_path))
+        # Output path mirrors original filename
+        output_path = os.path.join(out_path, os.path.basename(fp))
+        results.append((ds_tmpl, output_path))
 
     return results
 
 
 def reformat_and_save_3d(
+    config,
     bc_path,
     tlevel,
     startyear,
     endyear,
     input_vargcm,
     origin_vargcm,
+    manifest=None,  # added
+    manifest_key=None,  # added (e.g., "historical:ACCESS-ESM1-5")
 ):
     """
     Reformat and save 3D bias-corrected data to netCDF files.
@@ -367,21 +617,36 @@ def reformat_and_save_3d(
     for k in range(len(input_vargcm)):
         for y in range(startyear, endyear + 1):
             year = str(y)
-            nyear = y + 1
-            nyear = str(nyear)
-
-            # Get the input file paths for the current year
-            input_files = sorted(
-                glob.glob(
-                    f"{config.bc_hist_path}/{origin_vargcm[k]}/{config.sinfor}/v{config.version}/{origin_vargcm[k]}_*_{year}*.nc"
+            # Prefer manifest if supplied
+            if manifest is not None and manifest_key is not None:
+                # Try origin name first, then input name
+                var_key = (
+                    origin_vargcm[k]
+                    if origin_vargcm[k] in manifest
+                    else input_vargcm[k]
                 )
-            )
+                files_by_group = manifest.get(var_key, {}).get(manifest_key, {})
+                input_files = files_by_group.get(year, [])
+            else:
+                # Fallback to previous glob behaviour
+                input_files = sorted(
+                    glob.glob(
+                        f"{config['bc_hist_path']}/{origin_vargcm[k]}/{config['sinfor']}/v{config['version']}/{origin_vargcm[k]}_*_{year}*.nc"
+                    )
+                )
 
-            # Reformat and save the 3D variables
+            if not input_files:
+                print(f"[WARN] No template files for {origin_vargcm[k]} {year}")
+                continue
+
             results = reformatsave_3d(
-                bcf, input_vargcm[k], origin_vargcm[k], y, input_files, config.out_path
+                bcf,
+                input_vargcm[k],
+                origin_vargcm[k],
+                y,
+                input_files,
+                config["out_path"],
             )
-
             # Save data
             for dataset, output_filename in results:
                 print(f"Save 3d to netcdf {output_filename}")
@@ -461,7 +726,7 @@ def reformat_and_save_2d(input_path, original_file, output_file, remap_weights_f
 
 
 # ---------------------------------------------------------------------------------------------------
-def main(config):
+def main(config_path, var_interp, override_ncpus=None, override_mem=None):
     """
     Main function to initiate the reformatting process for bias-corrected GCM data.
 
@@ -473,47 +738,109 @@ def main(config):
         None: Initiates the reformatting for both 2D and 3D data based on the given configuration.
     """
 
-    setup_client()
+    # Load YAML config
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
 
-    startyear_h = config.startyear_h
-    endyear_h = config.endyear_h
-    startyear_h = config.startyear_h
-    bc_boundary = config.bc_boundary
-    tlevel = config.tlevel
-    out_path = config.out_path
-    target_variable = config.target_variable
+    # Resources
+    ncpus = override_ncpus or cfg.get("resources", {}).get("ncpus") or 4
+    mem_gb = override_mem or cfg.get("resources", {}).get("mem_gb") or 16
+
+    # Dask performance settings
+    dask.config.set(
+        {
+            "array.slicing.split_large_chunks": True,
+            "array.chunk-size": "64MiB",
+            "optimization.fuse.active": True,
+        }
+    )
+
+    # Start Dask client
+    client = setup_client(ncpus, mem_gb)
+
+    print("[INFO] Starting interpolation for variable:", var_interp)
+    print(f"[INFO] CMIP6 root: {cfg['target_path']} (table={cfg['gname']})")
+
+    # Inputs from YAML
+    out_path = cfg["out_path"]
+    tlevel = cfg.get("tlevel", len(cfg.get("target_variable", [])))  # fallback
+    target_variable = cfg["target_variable"]
+    bc_boundary = cfg["bc_boundary"]
+
+    # User overrides for archive search
+    roots = cfg.get("archive_roots", DEFAULT_ARCHIVE_ROOTS)
+    vmap = {**VAR_TO_TABLE_DEFAULT, **cfg.get("var_to_table", {})}
+
+    # Historical identifiers
+    startyear_h = cfg["startyear_h"]
+    endyear_h = cfg["endyear_h"]
+    activity_h, institution_h, source_id_h = infer_cmip6_ids_from_path(
+        cfg["bc_hist_path"]
+    )
+    if not all([activity_h, institution_h, source_id_h]):
+        raise ValueError(
+            f"Could not infer CMIP6 IDs from bc_hist_path: {cfg['bc_hist_path']}"
+        )
+
+    # Build manifest for historical only (extend similarly for future if needed)
+    manifest_hist = build_manifest(
+        variables=target_variable,
+        activity=activity_h,
+        institution=institution_h,
+        source_by_exp={"historical": source_id_h},
+        variant=cfg["cinfor"],
+        grid_label=cfg["sinfor"],
+        version=f"v{cfg['version']}",
+        years=range(startyear_h, endyear_h + 1),
+        roots=roots,
+        var_to_table=vmap,
+    )
+    manifest_key_hist = f"historical:{source_id_h}"
 
     print("Start reformatting")
     if bc_boundary == "lateral":
         reformat_and_save_3d(
-            out_path,
-            tlevel,
-            startyear_h,
-            endyear_h,
-            target_variable,
-            target_variable,
+            cfg,
+            bc_path=out_path,
+            tlevel=tlevel,
+            startyear=startyear_h,
+            endyear=endyear_h,
+            input_vargcm=target_variable,
+            origin_vargcm=target_variable,
+            manifest=manifest_hist,
+            manifest_key=manifest_key_hist,
         )
         print("Finish 3D reformatting")
-
     else:
+        # 2D path remains as-is (can be wired to manifest similarly if desired)
         target_files = sorted(
             glob.glob(
-                f"{config.bc_hist_path}/{target_variable[0]}/{config.sinfor}/v{config.version}/{config.target_variable[0]}_*.nc"
+                f"{cfg['bc_hist_path']}/{target_variable[0]}/{cfg['sinfor']}/v{cfg['version']}/{target_variable[0]}_*.nc"
             )
         )
         input_files = sorted(
             glob.glob(
                 os.path.join(
                     out_path,
-                    f"bc_corrected_2d_{config.infor}_{config.gname}_{config.period}_{config.cinfor}_{config.sinfor}_{startyear_h}_{endyear_h}.nc",
+                    f"bc_corrected_2d_{cfg['infor']}_{cfg['gname']}_{cfg['period']}_{cfg['cinfor']}_{cfg['sinfor']}_{startyear_h}_{endyear_h}.nc",
                 )
             )
         )
-        # obs_files = sorted(glob.glob(f"{config.obs_path}/{config.target_variable_sst[0]}_*.nc"))
         remap_weights_file = f"{out_path}/remap_weights_{target_variable[0]}_{startyear_h}_{endyear_h}.nc"
-        output_file = f"{out_path}/{target_variable[0]}_{config.infor}_{config.gname}_{config.period}_{config.cinfor}_{config.sinfor}_{startyear_h}0101-{endyear_h}1231.nc"
-
+        output_file = f"{out_path}/{target_variable[0]}_{cfg['infor']}_{cfg['gname']}_{cfg['period']}_{cfg['cinfor']}_{cfg['sinfor']}_{startyear_h}0101-{endyear_h}1231.nc"
         reformat_and_save_2d(
             input_files[0], target_files[0], output_file, remap_weights_file
         )
         print("Finish 2D reformatting")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--yp", required=True, help="Path to YAML config")
+    parser.add_argument(
+        "--ncpus", type=int, default=None, help="Override number of CPUs"
+    )
+    parser.add_argument("--mem", type=int, default=None, help="Override memory in GB")
+
+    args = parser.parse_args()
+    main(args.yp, args.var, args.ncpus, args.mem)

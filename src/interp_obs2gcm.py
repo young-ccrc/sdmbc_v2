@@ -16,6 +16,7 @@ Contact: youngil.kim@unsw.edu.au
 """
 
 import argparse
+import gc
 import glob
 import os
 import warnings
@@ -23,8 +24,10 @@ import warnings
 # from multiprocessing import Pool
 from pathlib import Path
 
+import dask  # type: ignore
 import dask.array as da  # type: ignore
 import numpy as np  # type: ignore
+import pandas as pd  # type: ignore
 
 # import dask.array as da  # type: ignore
 import xarray as xr  # type: ignore
@@ -59,23 +62,25 @@ def load_config(yaml_path):
 #         self.__dict__.update(entries)
 
 
-def setup_client(n_workers=None):
+def setup_client(ncpus, mem_gb):
     """
-    Set up Dask client for parallel processing, allowing customization of workers and threads.
-
-    Args:
-        n_workers (int): Number of workers to use.
-        threads_per_worker (int): Number of threads per worker.
-
-    Returns:
-        Client: A Dask distributed client instance.
+    Dynamically set up a Dask client based on available CPUs and memory.
     """
-    if n_workers is None:
-        c = Client()
-    else:
-        c = Client(n_workers=n_workers)
-    print("Dask client setup complete.")
-    return c
+    # Set threads per worker (try to keep under 8 for memory balance)
+    threads_per_worker = min(ncpus, 8)
+    n_workers = max(1, ncpus // threads_per_worker)
+    mem_per_worker = int(mem_gb / n_workers)
+
+    print(
+        f"[INFO] Starting Dask client: {n_workers} workers × {threads_per_worker} threads"
+    )
+    print(f"[INFO] Each worker memory limit: {mem_per_worker}GB")
+
+    return Client(
+        n_workers=n_workers,
+        threads_per_worker=threads_per_worker,
+        memory_limit=f"{mem_per_worker}GB",
+    )
 
 
 def parse_arguments():
@@ -95,9 +100,13 @@ def parse_arguments():
     parser.add_argument(
         "--var",
         type=str,
+        nargs="+",
         default=["hus", "ta", "ua", "va"],
-        help="Path to the YAML configuration file.",
+        help="Variable(s) to interpolate (e.g., --var ta or --var ta hus).",
     )
+
+    parser.add_argument("--ncpus", type=int, default=None)
+    parser.add_argument("--mem", type=int, default=None)
 
     # parser.add_argument(
     #     "--sy", type=int, default=config.startyear_h, help="Start year."
@@ -396,7 +405,10 @@ def compute_geopotential_height(p_levels, T_levels, orog, q_levels=None):
     delta_Phi = g0 * delta_Z  # Convert height differences to geopotential differences
 
     # Convert surface altitude to surface geopotential (Z_g = orog + delta_Z.cumsum(dim="lev") can be used as the orog already in meters)
-    Phi_s = g0 * orog  # Convert orog (meters) to geopotential (m²/s²)
+    # Phi_s = g0 * orog  # Convert orog (meters) to geopotential (m²/s²)
+    Phi_s = (g0 * orog).broadcast_like(
+        delta_Phi.isel(lev=0)
+    )  # (time, lat, lon) via auto align
 
     # Integrate from surface geopotential height
     Phi_levels = Phi_s + delta_Phi.cumsum(dim="lev")
@@ -501,102 +513,183 @@ def custom_interp(x_new, interp_func, x_min, x_max):
 #     return custom_interp(target_levels, f_interp, x_min, x_max)
 
 
-def interpolate_profile(
+# def interpolate_profile(
+#     source_profile, source_levels, target_levels, gcm_profile, gcm_levels
+# ):
+#     """
+#     Interpolates a source profile to match target levels with custom handling for extrapolation.
+
+#     Args:
+#         source_profile (array-like): The source profile to be interpolated.
+#         source_levels (array-like): The levels corresponding to the source profile.
+#         target_levels (array-like): The target levels to interpolate the source profile to.
+
+#     Returns:
+#         array-like: The interpolated profile matching the target levels.
+#     """
+#     # Check for NaN values
+#     if np.any(np.isnan(source_profile)) or np.any(np.isnan(source_levels)):
+#         print("NaN values found in source_profile or source_levels.")
+#         return np.full_like(
+#             target_levels, np.nan
+#         )  # Return NaN array of target levels' shape
+
+#     # Check for duplicate values in source_levels
+#     if len(np.unique(source_levels)) != len(source_levels):
+#         print("Duplicate values found in source_levels.")
+#         return np.full_like(
+#             target_levels, np.nan
+#         )  # Return NaN array of target levels' shape
+
+#     # Create the interpolation function with 'extrapolate' mode
+#     f_interp = interp1d(
+#         source_levels, source_profile, bounds_error=False, fill_value="extrapolate"
+#     )
+
+#     # Interpolate values at target levels
+#     interpolated_profile = f_interp(target_levels)
+
+#     # Identify the highest ERA5 level
+#     max_era5_level = np.max(source_levels)
+
+#     # Replace values above ERA5 max level with GCM values
+#     above_era5_mask = target_levels > max_era5_level
+#     interpolated_profile[above_era5_mask] = np.interp(
+#         target_levels[above_era5_mask], gcm_levels, gcm_profile
+#     )
+
+#     return interpolated_profile
+
+
+# def vertical_interpolation(
+#     source_da, source_levels_da, target_levels, gcm_profile, gcm_levels
+# ):
+#     """
+#     Perform vertical interpolation of a source data array to target levels using xarray's apply_ufunc.
+
+#     Parameters:
+#         source_da (xarray.DataArray): The source data array to be interpolated.
+#         source_levels_da (xarray.DataArray): The source data array's levels.
+#         target_levels (array-like): The target levels to interpolate to.
+
+#     Returns:
+#         xarray.DataArray: The interpolated data array.
+#     """
+#     # Wrapper to apply interpolation using xarray's apply_ufunc to handle Dask arrays efficiently
+#     # interpolated_da = xr.apply_ufunc(
+#     #     interpolate_profile,
+#     #     source_da,
+#     #     source_levels,
+#     #     target_levels,
+#     #     gcm_profile,
+#     #     gcm_levels,
+#     #     vectorize=True,  # Enable vectorized execution
+#     #     input_core_dims=[["level"], ["level"], ["lev"]],  # Define core dimensions
+#     #     output_core_dims=[["lev"]],  # Define output dimensions
+#     #     dask="parallelized",  # Enable Dask parallelization
+#     #     output_dtypes=[source_da.dtype],
+#     # )
+#     print("Performing vertical interpolation...")
+#     print("Source_da:", source_da)
+#     print("Source_levels_da:", source_levels_da)
+#     print("Target_levels:", target_levels)
+#     print("GCM_profile:", gcm_profile)
+#     print("GCM_levels:", gcm_levels)
+
+#     interpolated_da = xr.apply_ufunc(
+#         interpolate_profile,
+#         source_da,  # ERA5 temperature
+#         source_levels_da,  # ERA5 geopotential height
+#         target_levels,  # Target geopotential height
+#         gcm_profile,  # GCM temperature
+#         gcm_levels,  # GCM geopotential height
+#         vectorize=True,
+#         input_core_dims=[
+#             ["level"],
+#             ["level"],
+#             ["lev"],
+#             ["lev"],
+#             ["lev"],
+#         ],  # Add GCM dims
+#         output_core_dims=[["lev"]],
+#         dask="parallelized",
+#         output_dtypes=[source_da.dtype],
+#     )
+#     return interpolated_da.assign_coords(lev=target_levels.lev)
+
+
+def get_vdim(da: xr.DataArray) -> str:
+    for cand in ("lev", "level", "plev", "height"):
+        if cand in da.dims:
+            return cand
+    raise ValueError(
+        f"No vertical dim among ('lev','level','plev','height') in {da.dims}"
+    )
+
+
+def _interpolate_profile_1d(
     source_profile, source_levels, target_levels, gcm_profile, gcm_levels
 ):
-    """
-    Interpolates a source profile to match target levels with custom handling for extrapolation.
+    # finite & enough pts
+    m = np.isfinite(source_profile) & np.isfinite(source_levels)
+    if m.sum() < 2:
+        return np.full_like(target_levels, np.nan, dtype=np.float64)
 
-    Args:
-        source_profile (array-like): The source profile to be interpolated.
-        source_levels (array-like): The levels corresponding to the source profile.
-        target_levels (array-like): The target levels to interpolate the source profile to.
+    sp = source_profile[m].astype(np.float64, copy=False)
+    sl = source_levels[m].astype(np.float64, copy=False)
 
-    Returns:
-        array-like: The interpolated profile matching the target levels.
-    """
-    # Check for NaN values
-    if np.any(np.isnan(source_profile)) or np.any(np.isnan(source_levels)):
-        print("NaN values found in source_profile or source_levels.")
-        return np.full_like(
-            target_levels, np.nan
-        )  # Return NaN array of target levels' shape
+    # strictly increasing
+    if not np.all(np.diff(sl) > 0):
+        order = np.argsort(sl)
+        sl = sl[order]
+        sp = sp[order]
 
-    # Check for duplicate values in source_levels
-    if len(np.unique(source_levels)) != len(source_levels):
-        print("Duplicate values found in source_levels.")
-        return np.full_like(
-            target_levels, np.nan
-        )  # Return NaN array of target levels' shape
-
-    # Create the interpolation function with 'extrapolate' mode
-    f_interp = interp1d(
-        source_levels, source_profile, bounds_error=False, fill_value="extrapolate"
+    f = interp1d(
+        sl, sp, bounds_error=False, fill_value="extrapolate", assume_sorted=True
     )
+    tgt = np.asarray(target_levels, dtype=np.float64)
+    out = f(tgt)
 
-    # Interpolate values at target levels
-    interpolated_profile = f_interp(target_levels)
+    # replace above ERA5 top with GCM column
+    gm = np.isfinite(gcm_profile) & np.isfinite(gcm_levels)
+    if gm.sum() >= 2:
+        gl = np.asarray(gcm_levels[gm], dtype=np.float64)
+        gp = np.asarray(gcm_profile[gm], dtype=np.float64)
+        if not np.all(np.diff(gl) > 0):
+            oo = np.argsort(gl)
+            gl = gl[oo]
+            gp = gp[oo]
+        above = tgt > sl.max()
+        if np.any(above):
+            out[above] = np.interp(tgt[above], gl, gp)
 
-    # Identify the highest ERA5 level
-    max_era5_level = np.max(source_levels)
-
-    # Replace values above ERA5 max level with GCM values
-    above_era5_mask = target_levels > max_era5_level
-    interpolated_profile[above_era5_mask] = np.interp(
-        target_levels[above_era5_mask], gcm_levels, gcm_profile
-    )
-
-    return interpolated_profile
+    return out
 
 
 def vertical_interpolation(
     source_da, source_levels_da, target_levels, gcm_profile, gcm_levels
 ):
-    """
-    Perform vertical interpolation of a source data array to target levels using xarray's apply_ufunc.
+    vdim_src = get_vdim(source_da)
+    vdim_slev = get_vdim(source_levels_da)
+    vdim_tgt = get_vdim(target_levels)
+    vdim_gcm1 = get_vdim(gcm_profile)
+    vdim_gcm2 = get_vdim(gcm_levels)
 
-    Parameters:
-        source_da (xarray.DataArray): The source data array to be interpolated.
-        source_levels_da (xarray.DataArray): The source data array's levels.
-        target_levels (array-like): The target levels to interpolate to.
-
-    Returns:
-        xarray.DataArray: The interpolated data array.
-    """
-    # Wrapper to apply interpolation using xarray's apply_ufunc to handle Dask arrays efficiently
-    # interpolated_da = xr.apply_ufunc(
-    #     interpolate_profile,
-    #     source_da,
-    #     source_levels,
-    #     target_levels,
-    #     gcm_profile,
-    #     gcm_levels,
-    #     vectorize=True,  # Enable vectorized execution
-    #     input_core_dims=[["level"], ["level"], ["lev"]],  # Define core dimensions
-    #     output_core_dims=[["lev"]],  # Define output dimensions
-    #     dask="parallelized",  # Enable Dask parallelization
-    #     output_dtypes=[source_da.dtype],
-    # )
-    interpolated_da = xr.apply_ufunc(
-        interpolate_profile,
-        source_da,  # ERA5 temperature
-        source_levels_da,  # ERA5 geopotential height
-        target_levels,  # Target CNRM geopotential height
-        gcm_profile,  # GCM temperature
-        gcm_levels,  # GCM geopotential height
+    out = xr.apply_ufunc(
+        _interpolate_profile_1d,
+        source_da,
+        source_levels_da,
+        target_levels,
+        gcm_profile,
+        gcm_levels,
         vectorize=True,
-        input_core_dims=[
-            ["level"],
-            ["level"],
-            ["lev"],
-            ["lev"],
-            ["lev"],
-        ],  # Add GCM dims
-        output_core_dims=[["lev"]],
+        input_core_dims=[[vdim_src], [vdim_slev], [vdim_tgt], [vdim_gcm1], [vdim_gcm2]],
+        output_core_dims=[[vdim_tgt]],
         dask="parallelized",
-        output_dtypes=[source_da.dtype],
+        output_dtypes=[np.float64],
+        join="override",
     )
-    return interpolated_da.assign_coords(lev=target_levels.lev)
+    return out.assign_coords({vdim_tgt: target_levels[vdim_tgt]})
 
 
 def standardize_coords_from(ds):
@@ -718,22 +811,24 @@ def regrid(source_ds, target_ds, method, weights_path, rename_dict):
         filename=weights_path,
         reuse_weights=reuse_weights,
     )
+    try:
+        if isinstance(source_ds, xr.DataArray):
+            regridded_data = regridder(source_ds)
+            if source_ds.name in rename_dict:
+                regridded_data.name = rename_dict[source_ds.name]
+            return regridded_data
 
-    if isinstance(source_ds, xr.DataArray):
-        regridded_data = regridder(source_ds)
-        if source_ds.name in rename_dict:
-            regridded_data.name = rename_dict[source_ds.name]
-        return regridded_data
+        elif isinstance(source_ds, xr.Dataset):
+            regridded_data = regridder(source_ds)
+            for var in list(regridded_data.data_vars):
+                if var in rename_dict:
+                    regridded_data = regridded_data.rename({var: rename_dict[var]})
+            return regridded_data
 
-    elif isinstance(source_ds, xr.Dataset):
-        regridded_data = regridder(source_ds)
-        for var in list(regridded_data.data_vars):
-            if var in rename_dict:
-                regridded_data = regridded_data.rename({var: rename_dict[var]})
-        return regridded_data
-
-    else:
-        raise TypeError("Input must be xarray DataArray or Dataset")
+    finally:
+        # Avoid temporary in-memory structures leaking; keep the on-disk weights
+        regridder._grid_in = None
+        regridder._grid_out = None
 
 
 def standardize_coords(ds):
@@ -752,24 +847,218 @@ def standardize_coords(ds):
     return new_ds
 
 
+def prepend_last_hist_if_needed(future_files, hist_files, chunks=None):
+    # Open the future dataset
+    future_ds = xr.open_mfdataset(future_files, combine="by_coords", chunks=chunks)
+    first_time = future_ds.time.values[0]
+    # Check if first time is not 00:00
+    if str(first_time)[11:16] != "00:00":
+        # Open the historical dataset
+        hist_ds = xr.open_mfdataset(hist_files, combine="by_coords", chunks=chunks)
+        last_hist = hist_ds.sel(time=hist_ds.time == hist_ds.time.max())
+        # Concatenate along time
+        future_ds = xr.concat([last_hist, future_ds], dim="time")
+    return future_ds
+
+
+# prepare last_hist_ds and future_ds for concat
+def prepare_for_concat(last_hist_ds, future_ds):
+    # normalize lev name
+    # if "level" in last_hist_ds.dims and "lev" not in last_hist_ds.dims:
+    #     last_hist_ds = last_hist_ds.rename({"level": "lev"})
+    # if "level" in future_ds.dims and "lev" not in future_ds.dims:
+    #     future_ds = future_ds.rename({"level": "lev"})
+
+    # If lev arrays differ, drop vertical-metadata from the hist slice (cheap & safe if you don't need lev_bnds/b later)
+    # Note: drop them from both datasets to avoid MergeError due to differing attributes/values.
+    drop_vertical_meta = ["lev_bnds", "b", "b_bnds"]
+    last_hist_ds = last_hist_ds.drop_vars(drop_vertical_meta, errors="ignore")
+    future_ds = future_ds.drop_vars(drop_vertical_meta, errors="ignore")
+
+    # drop other bound vars that often conflict
+    last_hist_ds = last_hist_ds.drop_vars(
+        ["lat_bnds", "lon_bnds", "orog"], errors="ignore"
+    )
+    future_ds = future_ds.drop_vars(["lat_bnds", "lon_bnds", "orog"], errors="ignore")
+
+    # drop scalar coords/attrs that are not present in the other ds
+    for c in list(last_hist_ds.coords):
+        if c not in future_ds.coords and c not in future_ds.dims:
+            last_hist_ds = last_hist_ds.drop_vars(c, errors="ignore")
+
+    return last_hist_ds, future_ds
+
+
 # clear
 def load_target_files(target_path, infor, sinfor, version, var, year):
     """
-    Load target files based on the specified pattern.
-
-    Args:
-        target_path (str): The base directory path where the target files are located.
-        infor (str): Information string used in the file path.
-        sinfor (str): Secondary information string used in the file path.
-        version (str): Version string used in the file path.
-        var (str): Variable name used in the file path.
-        year (int): Year used in the file path.
-
-    Returns:
-        list: A sorted list of file paths matching the specified pattern.
+    Find CMIP6 target files like:
+    {target_path}/{infor}/{var}/{grid_label}/{version}/{var}_{infor}_*_{grid_label}_*.nc
     """
+    # Recursive, but constrained by {infor}/{var}/ to avoid Amon/day pulling in.
     pattern = f"{target_path}/{infor}/{var}/g*/v*/{var}_*{year}*.nc"
-    return sorted(glob.glob(pattern))
+    files = glob.glob(pattern, recursive=True)
+    print(files)
+    # Safeguard: if no files match, return empty list early
+    if not files:
+        raise FileNotFoundError(f"No files found for {pattern}. ")
+    # Optional: filter to grid labels and subtable inside the filename to avoid cross-table hits
+    # e.g. keep only filenames containing f"_{infor}_" and one of grid labels
+    keep = []
+    for f in files:
+        base = os.path.basename(f)
+        if f"_{infor}_" not in base:
+            continue
+        # If sinfor is provided (gn/gr/etc) prefer matches; otherwise accept any
+        if sinfor and f"_{sinfor}_" not in base:
+            continue
+        keep.append(f)
+
+    return sorted(keep)
+
+
+# clear
+def load_datasets_with_history(year, month, files, chunks, config, var, target_path):
+    """
+    Load datasets (future or historical) and, if the future starts at a non-zero hour,
+    attempt to prepend the final timestep from the historical run specified by
+    config['hist_target_path'].
+
+    Logic:
+     - Open future files (files).
+     - If the first timestep hour != 0 and config contains 'hist_target_path' and
+       hist path differs from target_path, search hist files for the needed time
+       (first_time - 6h). If found, prepend that single timestep and return the
+       concatenated dataset (then select year/month).
+    """
+    if not files:
+        raise FileNotFoundError(f"No files found for {year}-{month:02d}. ")
+
+    # open future dataset
+    future_ds = xr.open_mfdataset(files, combine="by_coords", chunks=chunks)
+    if "time" not in future_ds.coords:
+        # nothing to do
+        return future_ds.sel(
+            time=(future_ds["time"].dt.year == year)
+            & (future_ds["time"].dt.month == month)
+        )
+
+    first_time = pd.to_datetime(future_ds.time.values[0])
+    # if starts at midnight -> no action
+    if first_time.hour == 0:
+        # harmonize chunks
+        if "time" in future_ds.dims:
+            future_ds = future_ds.chunk(
+                {"time": min(32, max(8, future_ds.sizes["time"]))}
+            )
+        return future_ds.sel(
+            time=(future_ds["time"].dt.year == year)
+            & (future_ds["time"].dt.month == month)
+        )
+
+    # need to prepend previous 6-hour step
+    hist_root = config.get("hist_target_path")
+    if not hist_root or hist_root == target_path:
+        # no historical root provided or same path -> return future as-is
+        if "time" in future_ds.dims:
+            future_ds = future_ds.chunk(
+                {"time": min(32, max(8, future_ds.sizes["time"]))}
+            )
+        return future_ds.sel(
+            time=(future_ds["time"].dt.year == year)
+            & (future_ds["time"].dt.month == month)
+        )
+
+    needed_time = np.datetime64(first_time - pd.Timedelta(hours=6))
+
+    # look for candidate hist files in year and year-1 (covers files that span year-boundaries)
+    cand_files = []
+    for y in (year, year - 1):
+        try:
+            cand_files += load_target_files(
+                hist_root,
+                config["infor"],
+                config.get("sinfor", None),
+                config.get("version", None),
+                var,
+                y,
+            )
+        except Exception:
+            continue
+
+    cand_files = sorted(set(cand_files))
+    last_hist_slice = None
+    for hf in cand_files:
+        try:
+            # open minimal dataset (doesn't load data arrays until needed)
+            ds_tmp = xr.open_dataset(hf)
+            if "time" in ds_tmp.coords:
+                # check if the file contains needed_time
+                if np.any(ds_tmp["time"].values == needed_time):
+                    # last_hist_slice = ds_tmp.sel(time=needed_time)
+                    last_hist_slice = ds_tmp.sel(time=[needed_time])
+
+                    # keep only coordinates and needed variables; ds_tmp will be closed by GC
+                    break
+        except Exception:
+            continue
+
+    if last_hist_slice is None:
+        # nothing found; return future as-is
+        if "time" in future_ds.dims:
+            future_ds = future_ds.chunk(
+                {"time": min(32, max(8, future_ds.sizes["time"]))}
+            )
+        return future_ds.sel(
+            time=(future_ds["time"].dt.year == year)
+            & (future_ds["time"].dt.month == month)
+        )
+
+    # ensure last_hist_slice has same variable names / coords as future_ds for concatenation
+    # convert to dataset if DataArray
+    if isinstance(last_hist_slice, xr.DataArray):
+        last_hist_ds = last_hist_slice.to_dataset()
+    else:
+        last_hist_ds = last_hist_slice
+
+    # --- NEW: normalize vertical coordinate names if necessary ---
+    # Commonly files use 'lev' or 'level' — prefer 'lev' in this codebase
+    def normalize_lev(ds):
+        if "level" in ds.dims and "lev" not in ds.dims:
+            ds = ds.rename({"level": "lev"})
+        if "level" in ds.coords and "lev" not in ds.coords:
+            ds = ds.rename({"level": "lev"})
+        return ds
+
+    last_hist_ds = normalize_lev(last_hist_ds)
+    future_ds = normalize_lev(future_ds)
+
+    last_hist_ds, future_ds = prepare_for_concat(last_hist_ds, future_ds)
+
+    # 3) Make lev *identical* to avoid a union on concat
+    if "lev" in last_hist_ds.dims and "lev" in future_ds.dims:
+        last_hist_ds = last_hist_ds.assign_coords(lev=future_ds.lev)
+
+    # 4) Match variable dim order (prevents xarray from reordering on concat)
+    for v in set(last_hist_ds.data_vars) & set(future_ds.data_vars):
+        last_hist_ds[v] = last_hist_ds[v].transpose(*future_ds[v].dims)
+
+    xr.testing.assert_allclose(last_hist_ds.lev, future_ds.lev)
+    combined = xr.concat(
+        [last_hist_ds, future_ds],
+        dim="time",
+        data_vars="minimal",
+        coords="minimal",
+        join="exact",
+        compat="equals",
+    )
+    # print("combined", combined)
+
+    if "time" in combined.dims:
+        combined = combined.chunk({"time": min(32, max(8, combined.sizes["time"]))})
+    return combined.sel(
+        time=(combined["time"].dt.year == year) & (combined["time"].dt.month == month)
+    )
 
 
 # clear
@@ -786,12 +1075,18 @@ def load_datasets(year, month, files, chunks):
     Returns:
     xarray.Dataset: The filtered dataset containing data only for the specified year and month.
     """
+    # print(files)
+    if not files:
+        raise FileNotFoundError(f"No files found for {year}-{month:02d}. ")
     ds = xr.open_mfdataset(files, combine="by_coords", chunks=chunks)
+    # Harmonize chunks a little
+    if "time" in ds.dims:
+        ds = ds.chunk({"time": min(32, max(8, ds.sizes["time"]))})
     return ds.sel(time=(ds["time"].dt.year == year) & (ds["time"].dt.month == month))
 
 
 # clear
-def process_year_month(config, year, month):
+def process_year_month(config, year, month, selected_variables):
     """
     Processes data for a given year and month based on the provided configuration.
 
@@ -811,41 +1106,83 @@ def process_year_month(config, year, month):
     Raises:
     ValueError: If no data is available for the specified year, month, and variable.
     """
-    selected_variables = [config["var_interp"]]
+    # selected_variables = [config["var_interp"]]
+    # selected_variables = [selected_variables]
+    print("selected_variables", selected_variables)
     tq_variables = ["ta", "hus"]
 
-    target_grids = {
-        var: load_datasets(
+    # target_grids = {
+    #     var: load_datasets(
+    #         year,
+    #         month,
+    #         load_target_files(
+    #             config["target_path"],
+    #             config["infor"],
+    #             config["sinfor"],
+    #             config["version"],
+    #             var,
+    #             year,
+    #         ),
+    #         {"time": "auto", "lev": "auto", "lat": "auto", "lon": "auto"},
+    #     )
+    #     for var in selected_variables
+    # }
+    # tq_grids = {
+    #     var: load_datasets(
+    #         year,
+    #         month,
+    #         load_target_files(
+    #             config["target_path"],
+    #             config["infor"],
+    #             config["sinfor"],
+    #             config["version"],
+    #             var,
+    #             year,
+    #         ),
+    #         {"time": "auto", "lev": "auto", "lat": "auto", "lon": "auto"},
+    #     )
+    #     for var in tq_variables
+    # }
+
+    target_grids = {}
+    for var in selected_variables:
+        files = load_target_files(
+            config["target_path"],
+            config["infor"],
+            config["sinfor"],
+            config["version"],
+            var,
+            year,
+        )
+        target_grids[var] = load_datasets_with_history(
             year,
             month,
-            load_target_files(
-                config["target_path"],
-                config["infor"],
-                config["sinfor"],
-                config["version"],
-                var,
-                year,
-            ),
+            files,
             {"time": "auto", "lev": "auto", "lat": "auto", "lon": "auto"},
+            config,
+            var,
+            config["target_path"],
         )
-        for var in selected_variables
-    }
-    tq_grids = {
-        var: load_datasets(
+
+    tq_grids = {}
+    for var in tq_variables:
+        files = load_target_files(
+            config["target_path"],
+            config["infor"],
+            config["sinfor"],
+            config["version"],
+            var,
+            year,
+        )
+        tq_grids[var] = load_datasets_with_history(
             year,
             month,
-            load_target_files(
-                config["target_path"],
-                config["infor"],
-                config["sinfor"],
-                config["version"],
-                var,
-                year,
-            ),
+            files,
             {"time": "auto", "lev": "auto", "lat": "auto", "lon": "auto"},
+            config,
+            var,
+            config["target_path"],
         )
-        for var in tq_variables
-    }
 
     for var in selected_variables:
         target_grids[var]["lat"] = target_grids[var]["lat"].clip(-90, 90)
@@ -857,11 +1194,13 @@ def process_year_month(config, year, month):
         if tq_grids[var].sizes["time"] == 0:
             raise ValueError(f"No data available for {year}-{month} in variable {var}.")
 
-    return process_geopotential_height(config, target_grids, tq_grids, year, month)
+    return process_geopotential_height(
+        config, target_grids, tq_grids, year, month, selected_variables[0]
+    )
 
 
 # clear
-def process_geopotential_height(config, target_grids, tq_grids, year, month):
+def process_geopotential_height(config, target_grids, tq_grids, year, month, variable):
     """
     Processes the geopotential height based on the configuration and target grids.
 
@@ -876,7 +1215,7 @@ def process_geopotential_height(config, target_grids, tq_grids, year, month):
     tuple: A tuple containing the processed geopotential height data, target grids, and tq grids.
     """
     if (
-        target_grids[config["var_interp"]].lev.standard_name
+        target_grids[variable].lev.standard_name
         == "atmosphere_hybrid_height_coordinate"
     ):
         target_z_files = glob.glob(
@@ -885,20 +1224,21 @@ def process_geopotential_height(config, target_grids, tq_grids, year, month):
         target_zfull = (
             xr.open_dataset(
                 target_z_files[0], chunks={"lev": -1, "lat": -1, "lon": -1}
-            )["zfull"]
-            .transpose("lev", "lat", "lon")
-            .persist()
+            )["zfull"].transpose("lev", "lat", "lon")
+            # .persist()
         )
         return target_zfull, target_grids, tq_grids
     elif (
-        target_grids[config["var_interp"]].lev.standard_name
+        target_grids[variable].lev.standard_name
         == "atmosphere_hybrid_sigma_pressure_coordinate"
     ):
-        return compute_or_load_geopotential(config, target_grids, tq_grids, year, month)
+        return compute_or_load_geopotential(
+            config, target_grids, tq_grids, year, month, variable
+        )
 
 
 # clear
-def compute_or_load_geopotential(config, target_grids, tq_grids, year, month):
+def compute_or_load_geopotential(config, target_grids, tq_grids, year, month, variable):
     """
     Compute or load geopotential height for a given year and month.
 
@@ -940,7 +1280,7 @@ def compute_or_load_geopotential(config, target_grids, tq_grids, year, month):
             compute_geopotential_height(target_p, target_t.ta, orog)
             .chunk({"time": 10, "lev": -1, "lat": -1, "lon": -1})
             .transpose("time", "lev", "lat", "lon")
-            .persist()
+            # .persist()
         )
     else:
         target_zg_files = [
@@ -952,10 +1292,10 @@ def compute_or_load_geopotential(config, target_grids, tq_grids, year, month):
             target_zg_files, chunks={"time": 10, "lev": -1, "lat": -1, "lon": -1}
         )
         selected_target_z = target_z.sel(
-            time=(target_grids[config["var_interp"]]["time"].dt.year == year)
-            & (target_grids[config["var_interp"]]["time"].dt.month == month)
+            time=(target_grids[variable]["time"].dt.year == year)
+            & (target_grids[variable]["time"].dt.month == month)
         )
-        target_zfull = selected_target_z.rename({"z": "zfull"}).persist()
+        target_zfull = selected_target_z.rename({"z": "zfull"})  # .persist()
 
     return target_zfull, target_grids, tq_grids
 
@@ -1074,7 +1414,7 @@ def regrid_and_interpolate(
     target_ds = standardize_coords_from(target_grids[target_var])
     target_ds = correct_latitudes(target_ds)
     target_ds = ensure_bounds(target_ds)
-
+    # print("target_ds in line 1359", target_ds)
     rename_dict = {input_var: target_var}
 
     do = standardize_coords_from(load_input_data(input_files_pattern))
@@ -1097,14 +1437,17 @@ def regrid_and_interpolate(
     )
     # print('do_regridded')
     # print(do_regridded)
+    if do_regridded is None:
+        raise RuntimeError(
+            "Regridding failed: do_regridded is None. Check input data and regridder configuration."
+        )
 
     sliced_do = (
         do_regridded.sel(
             lat=slice(config["lat_min"], config["lat_max"]),
             lon=slice(config["lon_min"], config["lon_max"]),
-        )
-        .chunk({"level": -1})
-        .persist()
+        ).chunk({"level": -1})
+        # .persist()
     )
     # print('sliced_ds', sliced_do)
     # sliced_do.va[0,:,140:,150].plot(vmin= -40, vmax=40)
@@ -1123,10 +1466,9 @@ def regrid_and_interpolate(
             time=g_era5["time"].dt.hour.isin([0, 6, 12, 18])
         )
     else:
-        g_era5_resampled, input_grids, tq_input_grids = process_year_month(
-            config, year, month
-        )
-        g_era5_resampled = standardize_coords_from(g_era5_resampled)
+        result = process_year_month(config, year, month, target_var)
+        if result is not None:
+            g_era5_resampled = standardize_coords_from(result[0])
 
     target_zfull_per = standardize_coords_from(target_zfull_per)
 
@@ -1180,9 +1522,14 @@ def regrid_and_interpolate(
 
     if config["input_model"] == "reanalysis":
         Z_era5 = geopotential_to_geopotential_height(g_era5)
-        Z_era5_per = Z_era5.persist().chunk({vdim: -1})
+        Z_era5_per = Z_era5.chunk({vdim: -1})
     else:
-        Z_era5_per = g_era5.persist().chunk({vdim: -1})
+        Z_era5_per = g_era5.chunk({vdim: -1})
+
+    if target_ds is None:
+        raise RuntimeError(
+            "Interpolation failed: target_ds is None. Check input data and interpolation configuration."
+        )
 
     if target_var in ["ua", "va"]:
         # print('target_zfull_per_ua_va', target_zfull_per)
@@ -1208,14 +1555,15 @@ def regrid_and_interpolate(
             )
             gcm_z_data_interp = gcm_z_data_interp.assign_coords(lat=target_ds.lat)
 
+        vdim = get_vertical_dim_name(gcm_z_data_interp)
         sliced_gcm_z_data_interp = gcm_z_data_interp.sel(
             lat=slice(config["lat_min"], config["lat_max"]),
             lon=slice(config["lon_min"], config["lon_max"]),
-        ).chunk({"lev": -1})
+        ).chunk({vdim: -1})
         sliced_target_ds = target_ds.sel(
             lat=slice(config["lat_min"], config["lat_max"]),
             lon=slice(config["lon_min"], config["lon_max"]),
-        ).chunk({"lev": -1})
+        ).chunk({vdim: -1})
         # print('sliced_do[target_var]', sliced_do[target_var])
         # print('Z_era5_per', Z_era5_per)
         # print('sliced_gcm_z_data_interp', sliced_gcm_z_data_interp)
@@ -1228,15 +1576,19 @@ def regrid_and_interpolate(
             sliced_gcm_z_data_interp,
         )
     else:
+        vdim = get_vertical_dim_name(target_zfull_per)
         sliced_target_zfull = target_zfull_per.sel(
             lat=slice(config["lat_min"], config["lat_max"]),
             lon=slice(config["lon_min"], config["lon_max"]),
-        ).chunk({"lev": -1})
+        ).chunk({vdim: -1})
         sliced_target_ds = target_ds.sel(
             lat=slice(config["lat_min"], config["lat_max"]),
             lon=slice(config["lon_min"], config["lon_max"]),
-        ).chunk({"lev": -1})
-
+        ).chunk({vdim: -1})
+        # print(sliced_do[target_var])
+        # print(Z_era5_per)
+        # print(sliced_target_zfull)
+        # print(sliced_target_ds[target_var])
         interpolated_ds = vertical_interpolation(
             sliced_do[target_var],
             Z_era5_per,
@@ -1245,8 +1597,9 @@ def regrid_and_interpolate(
             sliced_target_zfull,
         )
 
-    interpolated_ds = interpolated_ds.transpose("time", "lev", "lat", "lon").chunk(
-        {"lev": -1}
+    vdim = get_vertical_dim_name(interpolated_ds)
+    interpolated_ds = interpolated_ds.transpose("time", vdim, "lat", "lon").chunk(
+        {vdim: -1}
     )
 
     if target_var in ["ua", "va"]:
@@ -1326,10 +1679,14 @@ def save_interpolated_data(interpolated_era5_da, output_file):
         interpolated_era5_da.to_netcdf(output_file, compute=False).compute()
 
 
+def map_obs_name(target_var):
+    return {"hus": "q", "ta": "t", "ua": "u", "va": "v"}[target_var]
+
+
 # End of the functions -------------------------------------------------------
 
 
-def main(config):
+def main(config_path, var_interp, override_ncpus=None, override_mem=None):
     """
     Main function to perform interpolation of variables from observational data to GCM (General Circulation Model) grid.
 
@@ -1344,12 +1701,39 @@ def main(config):
     Returns:
         None
     """
+    # Load YAML config
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
 
-    client = setup_client()
+    # Extract resources from config
+    ncpus = config.get("resources", {}).get("ncpus", 4)
+    mem_gb = config.get("resources", {}).get("mem_gb", 16)
 
+    # Override from command-line if provided
+    if override_ncpus:
+        ncpus = override_ncpus
+    if override_mem:
+        mem_gb = override_mem
+
+    # Dask performance settings
+    dask.config.set(
+        {
+            "array.slicing.split_large_chunks": True,
+            "array.chunk-size": "64MiB",
+            "optimization.fuse.active": True,
+        }
+    )
+
+    # Start Dask client
+    client = setup_client(ncpus, mem_gb)
+
+    print("[INFO] Starting interpolation for variable:", var_interp)
+    print(f"[INFO] CMIP6 root: {config['target_path']} (table={config['gname']})")
     # target_model = config.target_model
     # Define variables to interpolate
-    var_interp = config["var_interp"]
+    # var_interp = variable if isinstance(variable, list) else [variable]
+    # var_interp = variable
+
     # Define start and end years
     start_year = config["startyear_h"]
     end_year = config["endyear_h"]
@@ -1360,39 +1744,63 @@ def main(config):
     if var_interp in ["ua", "va", "ta", "hus"]:
         for year in range(start_year, end_year + 1):
             for month in range(1, 13):
-                target_zfull, target_grids, tq_grids = process_year_month(
-                    config, year, month
-                )
+                # Check if the output file already exists
+                output_file = f"{config['output_path']}/{var_interp}_{config['input_model'] if config['input_model'] == 'reanalysis' else config['input_gname']}_to_{config['gname']}_{year}-{month:02}.nc"
+                if os.path.exists(output_file):
+                    print(
+                        f"[INFO] Output file already exists: {output_file}. Skipping..."
+                    )
+                    continue
+                target_names = (
+                    args.var if isinstance(args.var, list) else [args.var]
+                )  # keep as list of target names
+                result = process_year_month(config, year, month, target_names)
+                # target_zfull, target_grids, tq_grids = process_year_month(
+                #     config, year, month, var_interp
+                # )
+
                 # var_interp = "ua"
                 # print('press_year_month_output_target_zfull', target_zfull)
                 if config["input_model"] == "reanalysis":
-                    if var_interp == "hus":
-                        var_obs = "q"
-                    elif var_interp == "ta":
-                        var_obs = "t"
-                    elif var_interp == "ua":
-                        var_obs = "u"
-                    elif var_interp == "va":
-                        var_obs = "v"
+                    var_obs = map_obs_name(var_interp)
                 else:
                     var_obs = var_interp
+
                 process_input_variable(
                     config,
                     var_obs,
                     var_interp,
                     year,
                     month,
-                    target_grids,
-                    target_zfull,
-                    tq_grids,
+                    result[1] if result else None,
+                    result[0] if result else None,
+                    result[2] if result else None,
                 )
+
+    del client
+    gc.collect()
 
 
 if __name__ == "__main__":
-    args = parse_arguments()
-    config = load_config(args.yp)
-    config["var_interp"] = args.var
-    # config.startyear_h = args.sy
-    # config.endyear_h = args.ey
-    main(config)
+    # args = parse_arguments()
+    # config = load_config(args.yp)
+    # config["var_interp"] = args.var
+    # # config.startyear_h = args.sy
+    # # config.endyear_h = args.ey
+    # if args.ncpus:
+    #     config["resources"]["ncpus"] = args.ncpus
+    # if args.mem:
+    #     config["resources"]["mem_gb"] = args.mem
+    # main(config)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--yp", required=True, help="Path to YAML config")
+    parser.add_argument("--var", required=True, help="Variable to process")
+    parser.add_argument(
+        "--ncpus", type=int, default=None, help="Override number of CPUs"
+    )
+    parser.add_argument("--mem", type=int, default=None, help="Override memory in GB")
+
+    args = parser.parse_args()
+    main(args.yp, args.var, args.ncpus, args.mem)
+
     print("All done!")

@@ -29,7 +29,7 @@ from pathlib import Path
 import xarray as xr  # type: ignore
 import xesmf as xe  # type: ignore
 import yaml  # type: ignore
-from cdo import Cdo
+from cdo import Cdo  # type: ignore
 from dask.diagnostics import ProgressBar  # type: ignore
 from dask.distributed import Client  # type: ignore
 
@@ -192,7 +192,7 @@ def main(config):
     # GCM
     # Load the target dataset
     target_files = sorted(
-        glob.glob(f"{target_path}/Oday/{target_2d}/{sinfor}/v*/{target_2d}_*")
+        glob.glob(f"{target_path}/Oday/{target_2d}/g*/v*/{target_2d}_*")
     )
 
     filtered_files = [
@@ -201,7 +201,7 @@ def main(config):
         if is_within_period(*extract_years(f), start_year, end_year)
     ]
     # print(filtered_files)
-    target_latlon_grid = glob.glob(f"{target_path}/fx/orog/{sinfor}/v*/orog_*.nc")
+    target_latlon_grid = glob.glob(f"{target_path}/fx/orog/g*/v*/orog_*.nc")
 
     for file in filtered_files:
         output_file = os.path.join(
@@ -289,9 +289,7 @@ def main(config):
         # GCM
         # Load the target dataset
         input_files = sorted(
-            glob.glob(
-                f"{input_path}/Oday/{input_2d}/{input_sinfor}/{input_version}/{input_2d}_*"
-            )
+            glob.glob(f"{input_path}/Oday/{input_2d}/g*/v*/{input_2d}_*")
         )
         filtered_files = [
             f

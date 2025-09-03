@@ -1,7 +1,7 @@
 MODULE constants
     implicit none
     integer, parameter :: ndaymax=366,nsmax=4,monmax=12,ndmax=31
-    integer, parameter :: nyrmax=31,nvarmax=4,nhmax=124
+    integer, parameter :: nyrmax=31,nvarmax=10,nhmax=124
     integer, parameter :: nnmax=nyrmax*ndaymax
     integer, parameter :: nsplmax = 4, iteral=4
 END MODULE constants
@@ -875,8 +875,8 @@ MODULE mbc_subroutines
 
     END SUBROUTINE avsdcor
 
-    subroutine sdsmooth(atm,av,sd,rho,iband,nvar,nday,ny,ns,ilpg, &
-        leap,idays,miss,nout)
+    subroutine sdsmooth(atm, iband, nday, ns, ilpg, &
+        leap, idays, miss, av, sd, rho)
 
         ! This subroutine smooths the atmospheric data and calculates
         ! the averages, standard deviations and correlations. It can
@@ -902,17 +902,29 @@ MODULE mbc_subroutines
         ! rho: Correlations after smoothing.
         use constants
         implicit none
-        integer, intent(in) :: iband, nday(monmax), ny, ns, ilpg, leap(4), nout
-        real(4), intent(in) :: atm(nvarmax,nyrmax,monmax,ndmax), miss
-        real(4), intent(inout) :: av(nvarmax,monmax,ndmax), sd(nvarmax,monmax,ndmax), &
-                                rho(nvarmax,monmax,ndmax)
-        integer, intent(in) :: idays(monmax,4), nvar
-        integer :: i, j, l, nnd, k1, nw, l1, jc, ic, lc, indx, ip, jp, lp
-        real(8) :: xx(nnmax), yy(nnmax)
-        real(4) :: avm, avp, sdm, sdp, cor
-        integer :: kk,nd,il
+        integer, intent(in) :: iband, nday(monmax), ns, ilpg, leap(4)
+        real(4), intent(in) :: atm(:,:,:,:), miss
+        ! Fixed-size outputs up to nvarmax; only first nvar entries are populated
+        real(4), intent(out) :: av(nvarmax,monmax,ndmax), sd(nvarmax,monmax,ndmax), &
+                    rho(nvarmax,monmax,ndmax)
+        integer, intent(in) :: idays(monmax,4)
+        integer :: nvar, ny, nout
+            integer :: i, j, l, nnd, k1, nw, l1, jc, ic, lc, indx, ip, jp, lp
+            real(8) :: xx(nnmax), yy(nnmax)
+            real(4) :: avm, avp, sdm, sdp, cor
+            integer :: kk,nd,il
 
-        ! Loop over each month
+        ! infer sizes from input arrays
+        nvar = MIN(SIZE(atm,1), nvarmax)
+        ny   = MIN(SIZE(atm,2), nyrmax)
+        nout = monmax
+
+        ! Initialize outputs
+        av = 0.0
+        sd = 0.0
+        rho = 0.0
+
+        ! Loop over each variable
         do il=1,nvar
             do j=1,nout
                 nnd=idays(j,ilpg)
@@ -1049,7 +1061,7 @@ MODULE mbc_subroutines
 
     end subroutine basic
 
-    subroutine avsds(atm, nvar, ny, av, sd, rho, nout, mnmax)
+    subroutine avsds(atm, av, sd, rho)
 
         use constants
         implicit none
@@ -1058,7 +1070,7 @@ MODULE mbc_subroutines
         ! nvar: The number of variables.
         ! ny: The number of years.
         ! nout: The number of months in a year.
-        ! mnmax: The maximum number of months.
+        ! monmax: The maximum number of months.
 
         ! Outputs:
         ! av: The calculated monthly averages for each variable.
@@ -1067,17 +1079,23 @@ MODULE mbc_subroutines
         ! amn: The minimum value of each variable.
         ! amx: The maximum value of each variable.
 
-        real(4), intent(in) :: atm(nvarmax, nyrmax, mnmax)
-        real(4), intent(inout) :: av(nvarmax, mnmax), sd(nvarmax, mnmax)
-        real(4), intent(inout) :: rho(nvarmax, mnmax)
+        real(4), intent(in) :: atm(:,:,:)
+        ! Fixed-size outputs up to nvarmax; only first nvar rows are used
+        real(4), intent(out) :: av(nvarmax, monmax), sd(nvarmax, monmax)
+        real(4), intent(out) :: rho(nvarmax, monmax)
         !real(4), intent(inout) :: amn(nvarmax), amx(nvarmax)
-        integer, intent(in) :: nvar, ny, nout, mnmax
-        real(4) :: ax(nyrmax, mnmax)
+        integer :: nvar, ny, nout
+        real(4) :: ax(nyrmax, monmax)
         integer :: i, j, il, ii
         real(8) :: xx(nnmax), yy(nnmax)
         real(4) :: avm, avm1, sdm, sdm1, cor
 
-        ! Initialize all output arrays to zero
+        ! infer sizes
+        nvar = MIN(SIZE(atm,1), nvarmax)
+        ny   = MIN(SIZE(atm,2), nyrmax)
+        nout = MIN(SIZE(atm,3), monmax)
+
+        ! Initialize all output arrays
         av = 0.0
         sd = 0.0
         rho = 0.0
@@ -1141,7 +1159,7 @@ MODULE mbc_subroutines
 
     end subroutine avsds
 
-    subroutine avsdy(atm, nvar, ny, avy, sdy, rhoy)
+    subroutine avsdy(atm, avy, sdy, rhoy)
         use constants
         implicit none
 
@@ -1158,14 +1176,20 @@ MODULE mbc_subroutines
         ! amn: The minimum value of each variable.
         ! amx: The maximum value of each variable.
 
-        real(4), intent(inout) :: atm(nvarmax, nyrmax), avy(nvarmax), sdy(nvarmax)
-        real(4), intent(inout) :: rhoy(nvarmax)
-        integer, intent(in) :: nvar, ny
+        real(4), intent(in) :: atm(:,:)
+        ! Fixed-size outputs up to nvarmax; only first nvar entries are used
+        real(4), intent(out) :: avy(nvarmax), sdy(nvarmax)
+        real(4), intent(out) :: rhoy(nvarmax)
+        integer :: nvar, ny
         integer :: i, il
         real(8) :: zz(nnmax), xx(nnmax), yy(nnmax)
         real(4) :: avm, sdm, avm1, sdm1, cor
 
-        ! Initialize all output arrays to zero
+        ! infer sizes
+        nvar = MIN(SIZE(atm,1), nvarmax)
+        ny   = MIN(SIZE(atm,2), nyrmax)
+
+        ! Initialize all output arrays
         avy = 0.0
         sdy = 0.0
         rhoy = 0.0
@@ -1366,8 +1390,7 @@ MODULE mbc_subroutines
 
     END SUBROUTINE
 
-    subroutine C_G_corl_daily(atm,cobs,dobs,iband,nvar,nday, &
-                              ny,ns,ilpg,leap,idays,inx,miss,nout)
+    subroutine C_G_corl_daily(atm, iband, nday, ns, ilpg, leap, idays, inx, miss, cobs, dobs)
         ! The subroutine C_G_corl_daily computes correlations in daily atmospheric data.
         ! The function takes into account the number of variables (nvar), days in a month (nday),
         ! number of years (ny), number of stations (ns), leap year indication (ilpg and leap),
@@ -1375,8 +1398,9 @@ MODULE mbc_subroutines
         use constants
         implicit none
 
-        real(4), intent(in) :: atm(nvarmax,nyrmax,monmax,ndmax)
-        real(kind=4), dimension(monmax,ndmax,nvarmax,nvarmax) :: cobs, dobs
+        real(4), intent(in) :: atm(:,:,:,:)
+        ! Fixed-size outputs up to nvarmax; only first nvar indices are used
+        real(kind=4), intent(out), dimension(monmax,ndmax,nvarmax,nvarmax) :: cobs, dobs
         real(kind=4), dimension(nvarmax,nvarmax) :: temp, m0, m1
         real(kind=4), dimension(nvarmax,nvarmax) :: co1, go1
         real(kind=4) :: miss
@@ -1389,7 +1413,12 @@ MODULE mbc_subroutines
         real(8) :: xx(nnmax), yy(nnmax), zz(nnmax)
         real(4) :: avm, avp, sdm, sdp, cor
 
-        ! Initialization of cobs and dobs arrays
+        ! infer sizes
+        nvar = MIN(SIZE(atm,1), nvarmax)
+        ny   = MIN(SIZE(atm,2), nyrmax)
+        nout = monmax
+
+        ! Initialize cobs and dobs arrays
         cobs = 0.0
         dobs = 0.0
         ! Iterate over output months
@@ -1548,23 +1577,28 @@ MODULE mbc_subroutines
 
     end subroutine C_G_corl_daily
 
-    subroutine C_G_corl_season(atm,nvar,ny,cobs,dobs,inx, &
-                                nout,mnmax)
+    subroutine C_G_corl_season(atm, inx, cobs, dobs)
 
         use constants
         implicit none
-        real(4), intent(in) :: atm(nvarmax,nyrmax,mnmax)
-        real(kind=4), dimension(mnmax,nvarmax,nvarmax) :: cobs, dobs
+        real(4), intent(in) :: atm(:,:,:)
+        ! Fixed-size outputs up to nvarmax; only first nvar indices are used
+        real(kind=4), intent(out), dimension(monmax,nvarmax,nvarmax) :: cobs, dobs
         real(kind=4), dimension(nvarmax,nvarmax) :: temp, m1t
-        real(kind=4), dimension(mnmax,nvarmax,nvarmax) :: m0, m1, m0p
+        real(kind=4), dimension(monmax,nvarmax,nvarmax) :: m0, m1, m0p
         real(kind=4), dimension(nvarmax,nvarmax) :: co1, go1
-        integer, intent(in):: nvar, ny, nout, inx, mnmax
+        integer :: nvar, ny, nout, inx
         integer :: i, j, i1, i2, ii
         real(8) :: xx(nnmax), yy(nnmax)
         real(4) :: avm, sdm, cor, avm1, sdm1
 
-        cobs = 0.0
-        dobs = 0.0
+    ! infer sizes
+    nvar = MIN(SIZE(atm,1), nvarmax)
+    ny   = MIN(SIZE(atm,2), nyrmax)
+    nout = MIN(SIZE(atm,3), monmax)
+
+    cobs = 0.0
+    dobs = 0.0
 
         do j=1,nout
         ! for cross correlations
@@ -1678,19 +1712,24 @@ MODULE mbc_subroutines
 
     end subroutine C_G_corl_season
 
-    subroutine C_G_corl_year(atm,nvar,ny,cobs,dobs,inx)
+    subroutine C_G_corl_year(atm, inx, cobs, dobs)
         use constants
         implicit none
 
-        real(4), intent(in) :: atm(nvarmax,nyrmax)
-        real(kind=4), dimension(nvarmax,nvarmax) :: cobs, dobs
+        real(4), intent(in) :: atm(:,:)
+        ! Fixed-size outputs up to nvarmax; only first nvar indices are used
+        real(kind=4), intent(out), dimension(nvarmax,nvarmax) :: cobs, dobs
         real(kind=4), dimension(nvarmax,nvarmax) :: temp
         real(kind=4), dimension(nvarmax,nvarmax) :: m0, m1
         real(kind=4), dimension(nvarmax,nvarmax) :: co1, go1
-        integer, intent(in):: nvar, ny, inx
+        integer :: nvar, ny, inx
         integer :: i, i1, i2
         real(8) :: xx(nnmax), yy(nnmax)
         real(4) :: avm, sdm, cor, avm1, sdm1
+
+        ! infer sizes
+        nvar = MIN(SIZE(atm,1), nvarmax)
+        ny   = MIN(SIZE(atm,2), nyrmax)
 
         cobs = 0.0
         dobs = 0.0

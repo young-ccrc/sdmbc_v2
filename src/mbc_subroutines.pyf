@@ -9,7 +9,7 @@ python module mrmbc ! in
             integer, parameter,optional :: monmax=12
             integer, parameter,optional :: ndmax=31
             integer, parameter,optional :: nyrmax=31
-            integer, parameter,optional :: nvarmax=4
+            integer, parameter,optional :: nvarmax=10
             integer, parameter,optional :: nhmax=124
             integer, parameter,optional,depend(ndaymax,nyrmax) :: nnmax=11346
             integer, parameter,optional :: nsplmax=4
@@ -48,29 +48,29 @@ python module mrmbc ! in
             end subroutine dsvdc
         end module svd
         module mbc_subroutines ! in :mrmbc:mbc_subroutines.f90
-            subroutine day(nday) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
-                use constants
-                integer dimension(12),intent(out) :: nday
+            subroutine day(nday,monmax) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                integer dimension(monmax),intent(out),depend(monmax) :: nday
+                integer intent(in) :: monmax
             end subroutine day
             subroutine daycount(ns,i,id) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 integer intent(in) :: ns
                 integer intent(in) :: i
                 integer intent(out) :: id
             end subroutine daycount
-            function iseas(j,isn,ij,isj) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
-                use constants
+            function iseas(j,isn,ij,isj,nsmax,monmax) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 integer intent(in) :: j
                 integer intent(in) :: isn
-                integer dimension(12),intent(in) :: ij
-                integer dimension(4,12),intent(in) :: isj
+                integer dimension(monmax),intent(in) :: ij
+                integer dimension(nsmax,monmax),intent(in),depend(monmax) :: isj
+                integer, optional,intent(in),check(shape(isj, 0) == nsmax),depend(isj) :: nsmax=shape(isj, 0)
+                integer, optional,intent(in),check(shape(ij, 0) == monmax),depend(ij) :: monmax=shape(ij, 0)
                 integer :: iseas
             end function iseas
             function iseas_s(j) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 integer intent(in) :: j
                 integer :: iseas_s
             end function iseas_s
-            subroutine day_pos(i,j,l,nout,ns,ilpg,leap,idays,nday,ny,ind) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
-                use constants
+            subroutine day_pos(i,j,l,nout,ns,ilpg,leap,idays,nday,ny,monmax,ind) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 integer intent(inout) :: i
                 integer intent(inout) :: j
                 integer intent(inout) :: l
@@ -78,13 +78,13 @@ python module mrmbc ! in
                 integer intent(in) :: ns
                 integer intent(in) :: ilpg
                 integer dimension(4),intent(in) :: leap
-                integer dimension(12,4),intent(in) :: idays
-                integer dimension(12),intent(in) :: nday
+                integer dimension(monmax,4),intent(in) :: idays
+                integer dimension(monmax),intent(in),depend(monmax) :: nday
                 integer intent(in) :: ny
+                integer, optional,intent(in),check(shape(idays, 0) == monmax),depend(idays) :: monmax=shape(idays, 0)
                 integer intent(out) :: ind
             end subroutine day_pos
-            subroutine day_neg(i,j,l,nout,ns,ilpg,leap,idays,lag,nday,ind) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
-                use constants
+            subroutine day_neg(i,j,l,nout,ns,ilpg,leap,idays,lag,nday,monmax,ind) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 integer intent(inout) :: i
                 integer intent(inout) :: j
                 integer intent(inout) :: l
@@ -92,38 +92,36 @@ python module mrmbc ! in
                 integer intent(in) :: ns
                 integer intent(in) :: ilpg
                 integer dimension(4),intent(in) :: leap
-                integer dimension(12,4),intent(in) :: idays
+                integer dimension(monmax,4),intent(in) :: idays
                 integer intent(in) :: lag
-                integer dimension(12),intent(in) :: nday
+                integer dimension(monmax),intent(in),depend(monmax) :: nday
+                integer, optional,intent(in),check(shape(idays, 0) == monmax),depend(idays) :: monmax=shape(idays, 0)
                 integer intent(out) :: ind
             end subroutine day_neg
-            subroutine avsdcor(n,r,ax,ay,sx,sy,xx,yy) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
-                use constants
+            subroutine avsdcor(n,r,ax,ay,sx,sy,xx,yy,nnmax) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 integer intent(in) :: n
                 real intent(out) :: r
                 real intent(out) :: ax
                 real intent(out) :: ay
                 real intent(out) :: sx
                 real intent(out) :: sy
-                real(kind=8) dimension(11346),intent(in) :: xx
-                real(kind=8) dimension(11346),intent(in) :: yy
+                real(kind=8) dimension(nnmax),intent(in) :: xx
+                real(kind=8) dimension(nnmax),intent(in),depend(nnmax) :: yy
+                integer, optional,intent(in),check(shape(xx, 0) == nnmax),depend(xx) :: nnmax=shape(xx, 0)
             end subroutine avsdcor
-            subroutine sdsmooth(atm,av,sd,rho,iband,nvar,nday,ny,ns,ilpg,leap,idays,miss,nout) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+            subroutine sdsmooth(atm,iband,nday,ns,ilpg,leap,idays,miss,av,sd,rho) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 use constants
-                real(kind=4) dimension(4,31,12,31),intent(in) :: atm
-                real(kind=4) dimension(4,12,31),intent(out) :: av
-                real(kind=4) dimension(4,12,31),intent(out) :: sd
-                real(kind=4) dimension(4,12,31),intent(out) :: rho
+                real(kind=4) dimension(:,:,:,:),intent(in) :: atm
                 integer intent(in) :: iband
-                integer intent(in) :: nvar
                 integer dimension(12),intent(in) :: nday
-                integer intent(in) :: ny
                 integer intent(in) :: ns
                 integer intent(in) :: ilpg
                 integer dimension(4),intent(in) :: leap
                 integer dimension(12,4),intent(in) :: idays
                 real(kind=4) intent(in) :: miss
-                integer intent(in) :: nout
+                real(kind=4) dimension(10,12,31),intent(out) :: av
+                real(kind=4) dimension(10,12,31),intent(out) :: sd
+                real(kind=4) dimension(10,12,31),intent(out) :: rho
             end subroutine sdsmooth
             subroutine basic(idata,ave,sd,n) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 real(kind=8) dimension(*),intent(in) :: idata
@@ -131,91 +129,78 @@ python module mrmbc ! in
                 real(kind=4) intent(out) :: sd
                 integer intent(in) :: n
             end subroutine basic
-            subroutine avsds(atm,nvar,ny,av,sd,rho,nout) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+            subroutine avsds(atm,av,sd,rho) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 use constants
-                real(kind=4) dimension(4,31,12),intent(in) :: atm
-                integer intent(in) :: nvar
-                integer intent(in) :: ny
-                real(kind=4) dimension(4,12),intent(out) :: av
-                real(kind=4) dimension(4,12),intent(out) :: sd
-                real(kind=4) dimension(4,12),intent(out) :: rho
-                integer intent(in) :: nout
+                real(kind=4) dimension(:,:,:),intent(in) :: atm
+                real(kind=4) dimension(10,12),intent(out) :: av
+                real(kind=4) dimension(10,12),intent(out) :: sd
+                real(kind=4) dimension(10,12),intent(out) :: rho
             end subroutine avsds
-            subroutine avsdy(atm,nvar,ny,avy,sdy,rhoy) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+            subroutine avsdy(atm,avy,sdy,rhoy) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 use constants
-                real(kind=4) dimension(4,31),intent(in) :: atm
-                integer intent(in) :: nvar
-                integer intent(in) :: ny
-                real(kind=4) dimension(4),intent(out) :: avy
-                real(kind=4) dimension(4),intent(out) :: sdy
-                real(kind=4) dimension(4),intent(out) :: rhoy
+                real(kind=4) dimension(:,:),intent(in) :: atm
+                real(kind=4) dimension(10),intent(out) :: avy
+                real(kind=4) dimension(10),intent(out) :: sdy
+                real(kind=4) dimension(10),intent(out) :: rhoy
             end subroutine avsdy
-            subroutine sqroot(sss,nv) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+            subroutine sqroot(sss,nv,nvrmax) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 use svd
-                use constants
-                real(kind=4) dimension(4,4),intent(inout) :: sss
+                real(kind=4) dimension(nvrmax,nvrmax),intent(inout) :: sss
                 integer intent(in) :: nv
+                integer, optional,intent(in),check(shape(sss, 0) == nvrmax),depend(sss) :: nvrmax=shape(sss, 0)
             end subroutine sqroot
-            subroutine solve(sss,nv) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+            subroutine solve(sss,nv,nvrmax) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 use svd
-                use constants
-                real(kind=4) dimension(4,4),intent(inout) :: sss
+                real(kind=4) dimension(nvrmax,nvrmax),intent(inout) :: sss
                 integer intent(in) :: nv
+                integer, optional,intent(in),check(shape(sss, 0) == nvrmax),depend(sss) :: nvrmax=shape(sss, 0)
             end subroutine solve
-            subroutine matmat(a,b,c,n) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
-                use constants
-                real(kind=4) dimension(4,4),intent(in) :: a
-                real(kind=4) dimension(4,4),intent(in) :: b
-                real(kind=4) dimension(4,4),intent(inout) :: c
+            subroutine matmat(a,b,c,n,nmax) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                real(kind=4) dimension(nmax,nmax),intent(in) :: a
+                real(kind=4) dimension(nmax,nmax),intent(in),depend(nmax) :: b
+                real(kind=4) dimension(nmax,nmax),intent(inout),depend(nmax) :: c
                 integer intent(in) :: n
+                integer, optional,intent(in),check(shape(a, 0) == nmax),depend(a) :: nmax=shape(a, 0)
             end subroutine matmat
-            subroutine matmul(a,b,c,n) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
-                use constants
-                real(kind=4) dimension(4,4),intent(in) :: a
-                real(kind=4) dimension(4),intent(in) :: b
-                real(kind=4) dimension(4),intent(out) :: c
+            subroutine matmul(a,b,c,n,nmax) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+                real(kind=4) dimension(nmax,nmax),intent(in) :: a
+                real(kind=4) dimension(nmax),intent(in),depend(nmax) :: b
+                real(kind=4) dimension(nmax),intent(out),depend(nmax) :: c
                 integer intent(in) :: n
+                integer, optional,intent(in),check(shape(a, 0) == nmax),depend(a) :: nmax=shape(a, 0)
             end subroutine matmul
-            subroutine c_g_corl_daily(atm,cobs,dobs,iband,nvar,nday,ny,ns,ilpg,leap,idays,inx,miss,nout) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+            subroutine c_g_corl_daily(atm,iband,nday,ns,ilpg,leap,idays,inx,miss,cobs,dobs) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 use constants
-                real(kind=4) dimension(4,31,12,31),intent(in) :: atm
-                real(kind=4) dimension(12,31,4,4),intent(out) :: cobs
-                real(kind=4) dimension(12,31,4,4),intent(out) :: dobs
+                real(kind=4) dimension(:,:,:,:),intent(in) :: atm
                 integer :: iband
-                integer :: nvar
                 integer dimension(12),intent(in) :: nday
-                integer :: ny
                 integer :: ns
                 integer :: ilpg
                 integer dimension(4),intent(in) :: leap
                 integer dimension(12,4),intent(in) :: idays
                 integer :: inx
                 real(kind=4) :: miss
-                integer :: nout
+                real(kind=4) dimension(12,31,10,10),intent(out) :: cobs
+                real(kind=4) dimension(12,31,10,10),intent(out) :: dobs
             end subroutine c_g_corl_daily
-            subroutine c_g_corl_season(atm,cobs,dobs,nvar,ny,inx,nout) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+            subroutine c_g_corl_season(atm,inx,cobs,dobs) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 use constants
-                real(kind=4) dimension(4,31,12),intent(in) :: atm
-                real(kind=4) dimension(12,4,4),intent(out) :: cobs
-                real(kind=4) dimension(12,4,4),intent(out) :: dobs
-                integer intent(in) :: nvar
-                integer intent(in) :: ny
-                integer intent(in) :: inx
-                integer intent(in) :: nout
+                real(kind=4) dimension(:,:,:),intent(in) :: atm
+                integer :: inx
+                real(kind=4) dimension(12,10,10),intent(out) :: cobs
+                real(kind=4) dimension(12,10,10),intent(out) :: dobs
             end subroutine c_g_corl_season
-            subroutine c_g_corl_year(atm,cobs,dobs,nvar,ny,inx) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
+            subroutine c_g_corl_year(atm,inx,cobs,dobs) ! in :mrmbc:mbc_subroutines.f90:mbc_subroutines
                 use constants
-                real(kind=4) dimension(4,31),intent(in) :: atm
-                real(kind=4) dimension(4,4),intent(out) :: cobs
-                real(kind=4) dimension(4,4),intent(out) :: dobs
-                integer intent(in) :: nvar
-                integer intent(in) :: ny
-                integer intent(in) :: inx
+                real(kind=4) dimension(:,:),intent(in) :: atm
+                integer :: inx
+                real(kind=4) dimension(10,10),intent(out) :: cobs
+                real(kind=4) dimension(10,10),intent(out) :: dobs
             end subroutine c_g_corl_year
         end module mbc_subroutines
     end interface 
 end python module mrmbc
 
-! This file was auto-generated with f2py (version:1.25.2).
+! This file was auto-generated with f2py (version:1.24.3).
 ! See:
 ! https://web.archive.org/web/20140822061353/http://cens.ioc.ee/projects/f2py2e

@@ -4,12 +4,11 @@
 
 # ================= Input Paths =================
 # Paths to input data and output directories
-bc_hist_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1/Oday" # Historical bias correction data path
-bc_future_path: "/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp370/r6i1p1f1/Oday" #
-obs_path: "/g/data/w28/yk8692/input/era5/access_esm" # Path to ERA5 observation data
-obs_future_path: "/g/data/w28/yk8692/input/era5/access_esm" # Path to ERA5 observation data
-out_path: "/g/data/w28/yk8692/tests/access/calibration" # Directory to save bias-corrected output
-
+bc_hist_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2/Oday" # Historical bias correction data path
+bc_future_path: "/g/data/oi10/replicas/CMIP6/ScenarioMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2/Oday" #
+obs_path: "/g/data/w28/yk8692/input/era5/cnrm" # Path to ERA5 observation data
+obs_future_path: "/g/data/w28/yk8692/input/era5/cnrm" # Path to ERA5 observation data
+out_path: "/g/data/w28/yk8692/tests/calibration/cnrm_test" # Directory to save bias-corrected output
 
 # ================= Simulation Periods =================
 # Historical simulation settings
@@ -18,18 +17,18 @@ startyear_h: 1959 # Start year for historical simulation
 endyear_h: 1989 # End year for historical simulation
 
 # Future simulation settings
-bc_future: True # Enable future simulation (True: Yes, False: No)
+bc_future: False # Enable future simulation (True: Yes, False: No)
 startyear_f: 1990 # Start year for future simulation
 endyear_f: 2020 # End year for future simulation
 
 # ================= GCM (Global Climate Model) Information =================
 # Historical data settings
 infor: "Oday" # Data frequency (6hrLev: 3D data, Oday: 2D data)
-gname: "ACCESS-ESM1-5" # Model name
+gname: "CNRM-CM6-1" # Model name
 period: "historical" # Simulation period (historical, validation, or future)
-cinfor: "r6i1p1f1" # Configuration information
+cinfor: "r1i1p1f2" # Configuration information
 sinfor: "gn" # Spatial resolution
-version: "20200529" # Dataset version
+version: "20180917" # Dataset version
 
 # Future data settings
 scenario: "ssp370" # Climate scenario for future simulation (e.g., ssp126, ssp370)
@@ -64,11 +63,7 @@ lower_limit: [0.0001, 150, 0.0001, 270] # Lower limits for variables
 save_bc_output: True # Save bias-corrected output (True: Yes, False: Save factors only)
 reformat_to_original: False # Reformat output to original format (True: Yes, False: No)
 
-# if reformat is True
-archive_roots: ["/g/data/oi10/replicas/CMIP6", "/g/data/fs38/publications/CMIP6"]
-var_to_table: {"hus":"6hrLev", "ta":"6hrLev", "ua":"6hrLev", "va":"6hrLev", "tos":"Oday", "ps":"Amon"}
-
 # ================= Usage =================
 # Edit the above parameters as needed. Save the file and pass its path to the script as follows:
-# python sdmbc_hist_main.py --yp /path/to/config.yaml
+# python sdmbc_hist_main.py --config /path/to/config.yaml
 # Ensure all file paths and variable names are correct. Refer to documentation for further details.

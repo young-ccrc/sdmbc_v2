@@ -4,8 +4,6 @@
 __pycache__/
 *.py[cod]
 *.so
-*.pyc
-__pycache__/
 
 build/
 dist/
