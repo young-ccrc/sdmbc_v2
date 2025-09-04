@@ -205,7 +205,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
     target_variable = config.target_variable
     upper_limit = config.upper_limit
     lower_limit = config.lower_limit
-    out_figure_path = config.out_figure_path
+    # out_figure_path = config.out_figure_path
 
     # Validate inputs
     if config.bc_future:
