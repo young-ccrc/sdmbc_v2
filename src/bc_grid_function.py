@@ -276,6 +276,129 @@ def apply_boundary_correction(config, six_hourly_data_hist, sliced_gcm):
         return six_hourly_data_hist
 
 
+# def process_tile(
+#     config,
+#     sliced_gcm,
+#     sliced_obs,
+# ):
+#     """
+#     Process a single tile for bias correction, involving loading GCM and observational data,
+#     performing bias correction, and saving the outputs.
+
+#     Args:
+#         sliced_gcm (xarray.Dataset): Sliced GCM data for the tile.
+#         sliced_obs (xarray.Dataset): Sliced observational data for the tile.
+#         config (module): Configuration object for bias correction parameters.
+
+#     Returns:
+#         tuple: Corrected GCM data and bias correction parameters.
+#     """
+
+#     # ------------------ Load GCM Data ------------------
+#     if config.bc_boundary == "lateral":
+#         assign_gcm = assign_w_6hr(config, sliced_gcm, config.bc_boundary)
+#         daily_gcm, fraction_factors_gcm = convert_to_daily_with_fraction(
+#             config, assign_gcm
+#         )
+#     else:
+#         daily_gcm = sliced_gcm
+
+#     var_list_w = (
+#         ["w", "ta", "hus"]
+#         if config.bc_boundary == "lateral"
+#         else config.target_variable
+#     )
+
+#     reshaped_gcm_delayed = extract_and_reshape_delayed(
+#         config,
+#         daily_gcm,
+#         config.no_of_variables,
+#         config.startyear_h,
+#         config.endyear_h,
+#         config.bc_boundary,
+#     )
+
+#     if config.bc_boundary != "lateral":
+#         reshaped_gcm_delayed += 273.15
+
+#     # ------------------ Load Observational Data ------------------
+#     if config.bc_boundary == "lateral":
+#         assign_obs = assign_w_6hr(config, sliced_obs, config.bc_boundary)
+#         daily_obs, fraction_factors_obs = convert_to_daily_with_fraction(
+#             config, assign_obs
+#         )
+#     else:
+#         daily_obs = sliced_obs
+
+#     reshaped_obs_delayed = extract_and_reshape_delayed(
+#         config,
+#         daily_obs,
+#         config.no_of_variables,
+#         config.startyear_h,
+#         config.endyear_h,
+#         config.bc_boundary,
+#     )
+
+#     # Perform bias correction across the tile
+#     if config.bc_boundary == "lateral":
+#         bc_corrected_gcm_hist_tile, bc_params_tile = bc_correction_grid_cell_hist_dask(
+#             config,
+#             reshaped_gcm_delayed,
+#             reshaped_obs_delayed,
+#             fraction_factors_gcm,
+#             fraction_factors_obs,
+#             var_list_w,
+#             sliced_gcm,
+#         )
+
+#     else:
+#         bc_corrected_gcm_hist_tile, bc_params_tile = (
+#             bc_correction_grid_cell_hist_dask_2d(
+#                 config,
+#                 reshaped_gcm_delayed,
+#                 reshaped_obs_delayed,
+#                 var_list_w,
+#                 config.startyear_h,
+#             )
+#         )
+
+#     return bc_corrected_gcm_hist_tile, bc_params_tile
+
+
+def _prepare_hist_args(config, sliced_gcm, sliced_obs):
+    if config.bc_boundary == "lateral":
+        assign_gcm = assign_w_6hr(config, sliced_gcm, config.bc_boundary)
+        daily_gcm, ff_gcm = convert_to_daily_with_fraction(config, assign_gcm)
+        assign_obs = assign_w_6hr(config, sliced_obs, config.bc_boundary)
+        daily_obs, ff_obs = convert_to_daily_with_fraction(config, assign_obs)
+        var_list_w = ["w", "ta", "hus"]
+    else:
+        daily_gcm, daily_obs = sliced_gcm, sliced_obs
+        ff_gcm = ff_obs = None
+        var_list_w = config.target_variable
+
+    rg = extract_and_reshape_delayed(
+        config,
+        daily_gcm,
+        config.no_of_variables,
+        config.startyear_h,
+        config.endyear_h,
+        config.bc_boundary,
+    )
+    ro = extract_and_reshape_delayed(
+        config,
+        daily_obs,
+        config.no_of_variables,
+        config.startyear_h,
+        config.endyear_h,
+        config.bc_boundary,
+    )
+    if config.bc_boundary != "lateral":
+        rg = rg + 273.15
+
+    return rg, ro, ff_gcm, ff_obs, var_list_w, sliced_gcm
+
+
 def process_tile(
     config,
     sliced_gcm,
@@ -294,75 +417,25 @@ def process_tile(
         tuple: Corrected GCM data and bias correction parameters.
     """
 
-    # ------------------ Load GCM Data ------------------
-    if config.bc_boundary == "lateral":
-        assign_gcm = assign_w_6hr(config, sliced_gcm, config.bc_boundary)
-        daily_gcm, fraction_factors_gcm = convert_to_daily_with_fraction(
-            config, assign_gcm
-        )
-    else:
-        daily_gcm = sliced_gcm
-
-    var_list_w = (
-        ["w", "ta", "hus"]
-        if config.bc_boundary == "lateral"
-        else config.target_variable
-    )
-
-    reshaped_gcm_delayed = extract_and_reshape_delayed(
-        config,
-        daily_gcm,
-        config.no_of_variables,
-        config.startyear_h,
-        config.endyear_h,
-        config.bc_boundary,
-    )
-
-    if config.bc_boundary != "lateral":
-        reshaped_gcm_delayed += 273.15
-
-    # ------------------ Load Observational Data ------------------
-    if config.bc_boundary == "lateral":
-        assign_obs = assign_w_6hr(config, sliced_obs, config.bc_boundary)
-        daily_obs, fraction_factors_obs = convert_to_daily_with_fraction(
-            config, assign_obs
-        )
-    else:
-        daily_obs = sliced_obs
-
-    reshaped_obs_delayed = extract_and_reshape_delayed(
-        config,
-        daily_obs,
-        config.no_of_variables,
-        config.startyear_h,
-        config.endyear_h,
-        config.bc_boundary,
+    rg, ro, ffg, ffo, var_list_w, gcm_pass = _prepare_hist_args(
+        config, sliced_gcm, sliced_obs
     )
 
     # Perform bias correction across the tile
     if config.bc_boundary == "lateral":
-        bc_corrected_gcm_hist_tile, bc_params_tile = bc_correction_grid_cell_hist_dask(
-            config,
-            reshaped_gcm_delayed,
-            reshaped_obs_delayed,
-            fraction_factors_gcm,
-            fraction_factors_obs,
-            var_list_w,
-            sliced_gcm,
+        ds, bc_params = bc_correction_grid_cell_hist_dask(
+            config, rg, ro, ffg, ffo, var_list_w, gcm_pass.copy(deep=True)
         )
-
     else:
-        bc_corrected_gcm_hist_tile, bc_params_tile = (
-            bc_correction_grid_cell_hist_dask_2d(
-                config,
-                reshaped_gcm_delayed,
-                reshaped_obs_delayed,
-                var_list_w,
-                config.startyear_h,
-            )
+        ds, bc_params = bc_correction_grid_cell_hist_dask_2d(
+            config,
+            rg,
+            ro,
+            var_list_w,
+            config.startyear_h,
         )
 
-    return bc_corrected_gcm_hist_tile, bc_params_tile
+    return ds, bc_params
 
 
 def future_subdaily_correction(
