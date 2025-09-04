@@ -25,7 +25,8 @@ htmlcov/
 .ruff_cache/
 .pyre/
 .pytype/
-
+*.pyc
+__pycache__/
 .ipynb_checkpoints/
 
 .vscode/
