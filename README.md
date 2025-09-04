@@ -15,8 +15,9 @@ It addresses systematic biases in GCMs to enhance the physical realism of Region
 - [Installation](#installation)
 - [Quick Start Guide](#quick-start-guide)
   - [1. Prepare Input Data (Interpolation)](#1-prepare-input-data-interpolation)
-  - [2. Perform Bias Correction](#2-perform-bias-correction)
-  - [3. Reformat Outputs](#3-reformat-outputs)
+  - [2. Compile mrmbc with f2py](#2-compile-mrmbc-with-f2py)
+  - [3. Perform Bias Correction](#3-perform-bias-correction)
+  - [4. Reformat Outputs](#4-reformat-outputs)
 - [License](#license)
 - [Citation](#citation)
 
@@ -54,34 +55,44 @@ pip install -r Requirements.txt
 - **3D Atmospheric Fields** (e.g., humidity, temperature):
 
 ```bash
-python src/interp_obs2gcm.py --yp configs/config_interp.yaml --var hus
+python src/interp_obs2gcm.py --yp path/to/config/config.yaml --var hus --ncpus N --mem M
 ```
 
 - **2D Surface Fields** (e.g., sea surface temperature):
 
 ```bash
-python src/interp_2d_obs2gcm_cdo.py --yp configs/config_interp.yaml --var tos
+python src/interp_2d_obs2gcm_cdo.py --yp path/to/config/config.yaml --var tos --ncpus N --mem M
 ```
 
 ---
+### 2. Compile mrmbc with f2py
 
-### 2. Perform Bias Correction
+Compile the Fortran subroutines into a Python module (requires gfortran). Run these in the directory containing mbc_subroutines.f90:
+
+```bash
+python -m numpy.f2py -m mrmbc -h mbc_subroutines.pyf mbc_subroutines.f90 --overwrite-signature
+python -m numpy.f2py -c mbc_subroutines.pyf mbc_subroutines.f90 --fcompiler=gnu95 --f90flags="-O3 -frecursive"
+```
+
+This produces a mrmbc module that can be imported from Python.
+
+### 3. Perform Bias Correction
 
 - **For 3D Atmospheric Variables**:
 
 ```bash
-python src/sdmbc_hist_main_3d.py --config configs/config_3d.yaml
+python src/sdmbc_main_3d.py --yp /path/to/config/config.yaml --ncpus N --mem M
 ```
 
 - **For 2D Surface Variables**:
 
 ```bash
-python src/sdmbc_hist_main_3d.py --config configs/config_sst.yaml
+python src/sdmbc_main_surface.py --config /path/to/config/config.yaml --ncpus N --mem M
 ```
 
 ---
 
-### 3. Reformat Outputs
+### 4. Reformat Outputs
 
 After bias correction, reformat outputs to match the original GCM structure:
 
@@ -92,9 +103,9 @@ from reformat_gcm2origin import reformat_and_save_3d
 
 reformat_and_save_3d(
     bc_path="/path/to/bias_corrected/",
-    tlevel=17,
-    startyear=1959,
-    endyear=1989,
+    tlevel={level},
+    startyear={year},
+    endyear={year},
     input_vargcm=["hus", "ta", "ua", "va"],
     origin_vargcm=["hus", "ta", "ua", "va"]
 )
