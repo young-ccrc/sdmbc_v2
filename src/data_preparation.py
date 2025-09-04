@@ -682,32 +682,30 @@ def assign_w_6hr(config, do, bc_boundary):
     Add specific humidity and wind speed to an xarray dataset for 6-hourly data based on boundary conditions.
 
     Args:
+        config (dict): Configuration dictionary (unused here, kept for compatibility).
         do (xarray.Dataset): Original dataset.
         bc_boundary (str): Boundary condition type ('lateral' or 'surface').
 
     Returns:
-        xarray.Dataset: Modified dataset.
+        xarray.Dataset: Modified dataset with 'hus' scaled, wind speed 'w' computed, 
+                        and ordered variables, without modifying the input dataset.
     """
-
-    ds = do.copy()
     if bc_boundary == "lateral":
-        # Convert specific humidity from kg/kg to g/kg directly on the dataset
-        ds["hus"] *= 10000
+        # Work on a copy to prevent modifying the input
+        ds = do.copy(deep=True)
 
-        # Calculate wind speed and add as a new variable directly on the dataset
-        # ds["w"] = np.sqrt(ds["u"] ** 2 + ds["v"] ** 2)
-        # ds = ds.chunk(
-        #     {"time": 1000, "lat": "auto", "lon": "auto"}
-        # )  # Pre-chunking for efficiency
-        ds["w"] = xr.apply_ufunc(calculate_w, ds["ua"], ds["va"], dask="parallelized")
+        # Scale 'hus' safely without altering 'do'
+        ds = ds.assign(hus=ds["hus"] * 10000)
 
-        ds["w"] *= 10
+        # Compute wind speed
+        ds = ds.assign(
+            w=xr.apply_ufunc(calculate_w, ds["ua"], ds["va"], dask="parallelized") * 10
+        )
 
-        # Drop 'u' and 'v' as they are no longer needed, using drop_vars for efficiency
+        # Drop unnecessary vars
         ds = ds.drop_vars(["ua", "va"])
 
-        # Transpose the order of variables from q t w to w t q
-        # ds = ds.transpose("w", "t", "q")
+        # Reorder variables
         ds_ordered = ds[["w", "ta", "hus"]]
         return ds_ordered
     else:
