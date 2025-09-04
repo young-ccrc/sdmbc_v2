@@ -64,6 +64,27 @@ python src/interp_obs2gcm.py --yp path/to/config/config.yaml --var hus --ncpus N
 python src/interp_2d_obs2gcm_cdo.py --yp path/to/config/config.yaml --var tos --ncpus N --mem M
 ```
 
+Note: Some GCMs store SST on i/j (curvilinear/tripolar) ocean grids (e.g., MOM, POP, NEMO/ORCA). Before running the 2D interpolation/bias-correction, first remap SST to a lat/lon grid.
+
+- Using CDO (bilinear):
+```bash
+# Create target grid description from a lat/lon template
+cdo griddes target_ll.nc > target_grid.txt
+# Remap to lat/lon
+cdo remapbil,target_grid.txt sst_ij.nc sst_ll.nc
+```
+
+- Using xESMF (Python):
+```python
+import xarray as xr, xesmf as xe
+src = xr.open_dataset("sst_ij.nc")           # contains 2D lon/lat for ocean grid
+dst = xr.open_dataset("target_ll.nc")        # desired lat/lon grid
+regridder = xe.Regridder(src, dst, "bilinear", reuse_weights=False)
+xr.Dataset({"sst": regridder(src["sst"])}).to_netcdf("sst_ll.nc")
+```
+
+Use sst_ll.nc as the SST input for subsequent steps.
+
 ---
 ### 2. Compile mrmbc with f2py
 
