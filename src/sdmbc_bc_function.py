@@ -2610,7 +2610,7 @@ def bc_correction_future(config, gcm_reshape, bc_params):
                     print("Correcting for seasonal mean and standard deviation", jj)
 
                 avs, _, _ = mbc.avsds(ggs)
-                avs = avs[:nvar, :]
+                avs = avs[:nvar, :nss]
                 # Calculate fact
                 non_zero_mask = bc_params.sdsc_iter[itr, :, :] > 1e-10
                 fact = np.ones_like(bc_params.sdsc_iter[itr, :, :])
