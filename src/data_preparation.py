@@ -172,19 +172,23 @@ def is_within_period(file_start, file_end, target_start, target_end):
 # Function to extract the year range from the filename
 def extract_years_remap(filename):
     """
-    Extract the start and end years from remapped filenames.
+    Extract the start and end years from filenames that include a date range.
+
+    This matches YYYYMMDD-YYYYMMDD anywhere in the filename, regardless of extra suffixes
+    like `_remapbil`, `_remapped`, etc.
 
     Args:
         filename (str): The filename containing the year information.
 
     Returns:
-        tuple: Start and end year extracted from the filename, or None if not found.
+        tuple: Start and end year extracted from the filename, or (None, None) if not found.
     """
 
-    match = re.search(r"_(\d{8})-(\d{8})\_remapped.nc", filename)
-    if match:
-        start = int(match.group(1)[:4])
-        end = int(match.group(2)[:4])
+    # Match ..._YYYYMMDD-YYYYMMDD_... anywhere in the name
+    m = re.search(r"_(\d{8})-(\d{8})(?:_|\.|$)", filename)
+    if m:
+        start = int(m.group(1)[:4])
+        end = int(m.group(2)[:4])
         return start, end
     return None, None
 
@@ -322,14 +326,14 @@ def generate_file_paths(
     if config.bc_boundary == "lateral":
         for year in range(start_year, end_year + 1):
             year_pattern = (
-                f"{base_path}/{variable}/g*/v*/"
+                f"{base_path}/{variable}/g?/v*/"
                 f"{variable}_{infor}_{gname}_*_{year}*.nc"
             )
             this_year_files = sorted(glob.glob(year_pattern))
 
             if year == start_year and needs_prev_december(this_year_files, year):
                 prev_year_pattern = (
-                    f"{base_path}/{variable}/g*/v*/"
+                    f"{base_path}/{variable}/g?/v*/"
                     f"{variable}_{infor}_{gname}_*_{year-1}*.nc"
                 )
                 prev_year_files = glob.glob(prev_year_pattern)
@@ -341,8 +345,9 @@ def generate_file_paths(
             file_paths.extend(this_year_files)
 
     else:
-        # file_path_pattern = glob.glob(f"{base_path}/{variable}_*_remapped.nc")
-        file_path_pattern = glob.glob(f"{base_path}/{variable}_*.nc")
+        # file_path_pattern = glob.glob(f"{base_path}/{variable}_*_remap*.nc")
+        # file_path_pattern = glob.glob(f"{base_path}/{variable}_*.nc")
+        file_path_pattern = glob.glob(f"{base_path}/{variable}_*_*[rR]emap*.nc")
         filtered_files = [
             f
             for f in file_path_pattern
@@ -1055,7 +1060,7 @@ def convert_6hr_to_original_xr(config, bias_corrected_data_xr, g_u_xr, g_v_xr):
         {"time": 1000, "lat": -1, "lon": -1}
     )
 
-    # Convert hus by dividing by 1000, back to original units
+    # Convert hus by dividing to 1000, back to original units
     q_converted = (
         bias_corrected_data_xr["hus"] / 10000
     )  # change 1000 to 10000 to avoid small values
@@ -1097,37 +1102,90 @@ def convert_6hr_to_original_xr(config, bias_corrected_data_xr, g_u_xr, g_v_xr):
 
 def expand_config_bounds_from_data(lat_min, lat_max, lon_min, lon_max, sample_file):
     """
-    Dynamically expands latitude and longitude bounds based on the grid step
-    detected from a sample NetCDF file.
+    Dynamically expands latitude and longitude bounds by (about) one grid cell,
+    but clamps to the dataset extent for global requests.
 
-    Args:
-        config: Configuration object containing lat/lon boundaries.
-        sample_file (str): Path to a sample NetCDF file to detect lat/lon resolution.
-
-    Returns:
-        Updated configuration with expanded lat/lon bounds.
+    - If user requests (near) global in lat or lon, do not expand past the grid.
+    - Handle lon convention differences ([-180,180] vs [0,360]).
     """
-
-    # Load a small dataset to detect lat/lon spacing
     sample_data = xr.open_dataset(sample_file)
-    # Compute grid spacing
-    lat_step = np.abs(sample_data.lat[1].values - sample_data.lat[0].values)
-    lon_step = np.abs(sample_data.lon[1].values - sample_data.lon[0].values)
 
-    # Expand the domain before loading full dataset
-    latmin = lat_min - lat_step
-    latmax = lat_max + lat_step
-    lonmin = lon_min - lon_step
-    lonmax = lon_max + lon_step
-    sample_data = sample_data.sel(lat=slice(latmin, latmax), lon=slice(lonmin, lonmax))
-    lat_size, lon_size = sample_data.sizes["lat"], sample_data.sizes["lon"]
     lat_values = sample_data.lat.values
     lon_values = sample_data.lon.values
-    latmin = lat_values.min()
-    latmax = lat_values.max()
-    lonmin = lon_values.min()
-    lonmax = lon_values.max()
 
+    # Grid spacing
+    dy = float(np.abs(lat_values[1] - lat_values[0])) if len(lat_values) > 1 else 0.0
+    dx = float(np.abs(lon_values[1] - lon_values[0])) if len(lon_values) > 1 else 0.0
+
+    data_lat_min = float(np.min(lat_values))
+    data_lat_max = float(np.max(lat_values))
+    data_lon_min = float(np.min(lon_values))
+    data_lon_max = float(np.max(lon_values))
+
+    # Normalize requested lon range to dataset convention
+    req_lon_min, req_lon_max = float(lon_min), float(lon_max)
+
+    def to_0360(v):
+        return v % 360.0
+
+    def to_m180_180(v):
+        v = ((v + 180.0) % 360.0) - 180.0
+        # Fix -180 exact to 180 conventionally if dataset min is ~-180
+        return v
+
+    if data_lon_min >= 0.0:  # dataset in [0,360)
+        req_lon_min = to_0360(req_lon_min)
+        req_lon_max = to_0360(req_lon_max)
+    else:  # dataset in [-180,180]
+        req_lon_min = to_m180_180(req_lon_min)
+        req_lon_max = to_m180_180(req_lon_max)
+
+    # Determine if user asked for global coverage
+    # Requested lon span, accounting for wrap
+    span_req = (req_lon_max - req_lon_min) % 360.0
+    total_span = (data_lon_max - data_lon_min) + (dx if dx > 0 else 0.0)
+
+    # Treat span 0 (e.g., 0..360) as full circle
+    is_global_lon = dx > 0 and (
+        abs(span_req - total_span) <= 0.5 * dx or span_req == 0.0 or abs(span_req - 360.0) <= 0.5 * dx
+    )
+
+    # For latitude, check near-global request (within half a cell from ends)
+    is_global_lat = (
+        lat_min <= data_lat_min + 0.5 * dy if dy > 0 else True
+    ) and (
+        lat_max >= data_lat_max - 0.5 * dy if dy > 0 else True
+    )
+
+    # Expand or clamp latitude
+    if is_global_lat or dy == 0.0:
+        latmin = data_lat_min
+        latmax = data_lat_max
+    else:
+        latmin = max(data_lat_min, float(lat_min) - dy)
+        latmax = min(data_lat_max, float(lat_max) + dy)
+
+    # Expand or clamp longitude (no cross-seam slice here; clamp to dataset span)
+    if is_global_lon or dx == 0.0:
+        lonmin = data_lon_min
+        lonmax = data_lon_max
+    else:
+        # Ensure ordering consistent with dataset (assumes monotonic increasing lon)
+        if req_lon_min <= req_lon_max:
+            lonmin = max(data_lon_min, req_lon_min - dx)
+            lonmax = min(data_lon_max, req_lon_max + dx)
+        else:
+            # Rare case: user provided wrapped range (e.g., 350..10) — clamp to dataset and do not expand across seam
+            lonmin = data_lon_min
+            lonmax = data_lon_max
+
+    # Subset once to determine sizes/values after clamped expansion
+    subset = sample_data.sel(lat=slice(latmin, latmax), lon=slice(lonmin, lonmax))
+    lat_size, lon_size = subset.sizes["lat"], subset.sizes["lon"]
+    lat_values = subset.lat.values
+    lon_values = subset.lon.values
+
+    sample_data.close()
     return latmin, latmax, lonmin, lonmax, lat_size, lon_size, lat_values, lon_values
 
 
@@ -1167,29 +1225,22 @@ def determine_tiles(config, lat_size, lon_size, max_tile_size=None):
 
 def split_domain(n_lat_tiles, n_lon_tiles, lat_values, lon_values):
     """
-    Splits the domain into index-based tiles, expanding edge tiles by half a grid cell.
-
-    Args:
-        ds (xarray.Dataset): Dataset containing lat/lon coordinates.
-        n_lat_tiles (int): Number of tiles in the latitude direction.
-        n_lon_tiles (int): Number of tiles in the longitude direction.
-
-    Returns:
-        list: List of dictionaries containing index ranges and adjusted coordinate bounds for each tile.
+    Splits the domain into index-based tiles, expanding only interior tiles by half a grid cell.
+    Edge tiles are clamped to the dataset extent (important for global domains).
     """
-
-    # lat_values = ds.lat.values
-    # lon_values = ds.lon.values
-
     lat_size = len(lat_values)
     lon_size = len(lon_values)
 
     lat_indices = np.linspace(0, lat_size, n_lat_tiles + 1, dtype=int)
     lon_indices = np.linspace(0, lon_size, n_lon_tiles + 1, dtype=int)
 
-    # Compute grid spacing
-    dy = np.abs(lat_values[1] - lat_values[0])  # Latitude step size
-    dx = np.abs(lon_values[1] - lon_values[0])  # Longitude step size
+    dy = float(np.abs(lat_values[1] - lat_values[0])) if lat_size > 1 else 0.0
+    dx = float(np.abs(lon_values[1] - lon_values[0])) if lon_size > 1 else 0.0
+
+    data_lat_min = float(lat_values.min())
+    data_lat_max = float(lat_values.max())
+    data_lon_min = float(lon_values.min())
+    data_lon_max = float(lon_values.max())
 
     tiles = []
     for i in range(n_lat_tiles):
@@ -1197,19 +1248,19 @@ def split_domain(n_lat_tiles, n_lon_tiles, lat_values, lon_values):
             lat_min_idx, lat_max_idx = lat_indices[i], lat_indices[i + 1]
             lon_min_idx, lon_max_idx = lon_indices[j], lon_indices[j + 1]
 
-            lat_min = lat_values[lat_min_idx] - (
-                dy / 2 if i >= 0 else 0
-            )  # Expand bottom edge
-            lat_max = lat_values[lat_max_idx - 1] + (
-                dy / 2 if i <= n_lat_tiles - 1 else 0
-            )  # Expand top edge
+            # Expand only interior tile edges by half-cell
+            lat_min = float(lat_values[lat_min_idx]) - (0.5 * dy if i > 0 else 0.0)
+            lat_max = float(lat_values[lat_max_idx - 1]) + (0.5 * dy if i < n_lat_tiles - 1 else 0.0)
 
-            lon_min = lon_values[lon_min_idx] - (
-                dx / 2 if j >= 0 else 0
-            )  # Expand left edge
-            lon_max = lon_values[lon_max_idx - 1] + (
-                dx / 2 if j <= n_lon_tiles - 1 else 0
-            )  # Expand right edge
+            lon_min = float(lon_values[lon_min_idx]) - (0.5 * dx if j > 0 else 0.0)
+            lon_max = float(lon_values[lon_max_idx - 1]) + (0.5 * dx if j < n_lon_tiles - 1 else 0.0)
+
+            # Clamp to dataset extent (prevents going beyond global edges)
+            lat_min = max(lat_min, data_lat_min)
+            lat_max = min(lat_max, data_lat_max)
+            lon_min = max(lon_min, data_lon_min)
+            lon_max = min(lon_max, data_lon_max)
+
             tiles.append(
                 {
                     "lat_min_idx": lat_min_idx,

@@ -51,6 +51,34 @@ logging.getLogger("xarray").setLevel(logging.WARNING)
 logging.getLogger("dask").setLevel(logging.WARNING)
 
 
+# Helper: robust coordinate-to-index lookup (avoids nearest overlap and float mismatch)
+def _grid_index(coord_vals, target, tol=None):
+    arr = np.asarray(coord_vals)
+    idx = int(np.argmin(np.abs(arr - target)))
+    if tol is None:
+        return idx
+    if abs(arr[idx] - target) <= tol:
+        return idx
+    raise KeyError(f"Target {target} not found within tolerance {tol}")
+
+
+def _default_tol_from(da_or_ds):
+    lat = da_or_ds.lat.values
+    lon = da_or_ds.lon.values
+    dy = float(np.min(np.abs(np.diff(lat)))) if lat.size > 1 else 0.0
+    dx = float(np.min(np.abs(np.diff(lon)))) if lon.size > 1 else 0.0
+    # strict tolerance: smaller than half-grid so two tiles can't claim the same edge
+    base = min(dx if dx > 0 else 1.0, dy if dy > 0 else 1.0)
+    return 0.25 * base
+
+
+def _isel_point(obj, lat, lon, tol=None):
+    tol = _default_tol_from(obj) if tol is None else tol
+    lat_idx = _grid_index(obj.lat.values, lat, tol)
+    lon_idx = _grid_index(obj.lon.values, lon, tol)
+    return obj.isel(lat=lat_idx, lon=lon_idx)
+
+
 def correction_wrapper(config, gcm_data, obs_data):
     """
     Wrapper function to apply bias correction for historical GCM data.
@@ -102,9 +130,12 @@ def process_grid_cell(config, lat, lon, reshaped_gcm, reshaped_obs):
         if config.bc_boundary == "lateral"
         else config.target_variable
     )
-    gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
-    obs_data = [reshaped_obs[var].sel(lat=lat, lon=lon).values for var in var_list_w]
-
+    # gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
+    # obs_data = [reshaped_obs[var].sel(lat=lat, lon=lon).values for var in var_list_w]
+    # Use index-based selection to avoid .sel() KeyErrors on tile edges
+    gcm_data = [_isel_point(reshaped_gcm[var], lat, lon).values for var in var_list_w]
+    obs_data = [_isel_point(reshaped_obs[var], lat, lon).values for var in var_list_w]
+    
     # Apply the correction
     gcmc_corrected, bc_params = correction_wrapper(config, gcm_data, obs_data)
 
@@ -135,8 +166,10 @@ def process_grid_cell_future(config, lat, lon, reshaped_gcm, bc_params_array):
         else config.target_variable
     )
 
-    gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
-
+    # gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
+    # Use index-based selection to avoid .sel() KeyErrors on tile edges
+    gcm_data = [_isel_point(reshaped_gcm[var], lat, lon).values for var in var_list_w]
+    
     # Find the nearest latitude and longitude indices in reshaped_gcm_delayed_f
     lat_array = reshaped_gcm.lat.values
     lon_array = reshaped_gcm.lon.values
@@ -1099,9 +1132,11 @@ def correction_wrapper_pool(args):
     # print(f"Processing lat: {lat}, lon: {lon} on process ID: {os.getpid()}")
 
     # Extract GCM data for this (lat, lon)
-    gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
-    obs_data = [reshaped_obs[var].sel(lat=lat, lon=lon).values for var in var_list_w]
-
+    # gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
+    # obs_data = [reshaped_obs[var].sel(lat=lat, lon=lon).values for var in var_list_w]
+    # Index-based selection
+    gcm_data = [_isel_point(reshaped_gcm[var], lat, lon).values for var in var_list_w]
+    obs_data = [_isel_point(reshaped_obs[var], lat, lon).values for var in var_list_w]
     # Convert GCM data to NumPy (Fortran needs NumPy)
     gcm_data_np = np.stack(gcm_data, axis=0).astype(np.float32)
     obs_data_np = np.stack(obs_data, axis=0).astype(np.float32)
@@ -1147,13 +1182,20 @@ def bc_correction_grid_cell_multiprocess(config, gcm, obs, variable):
     }
     bc_params_array = np.empty((len(gcm.lat), len(gcm.lon)), dtype=object)
     # Fill the arrays
+    # for result in results:
+    #     lat_idx = np.where(lat_values == result["lat"])[0][0]
+    #     lon_idx = np.where(lon_values == result["lon"])[0][0]
+    #     for i, var in enumerate(variable):
+    #         corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+    #     bc_params_array[lat_idx, lon_idx] = result["bc_params"].to_dict()
+    # Use index lookup instead of float equality
     for result in results:
-        lat_idx = np.where(lat_values == result["lat"])[0][0]
-        lon_idx = np.where(lon_values == result["lon"])[0][0]
+        li = _grid_index(lat_values, result["lat"])
+        lj = _grid_index(lon_values, result["lon"])
         for i, var in enumerate(variable):
-            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
-        bc_params_array[lat_idx, lon_idx] = result["bc_params"].to_dict()
-
+            corrected_data[var][:, :, :, li, lj] = result["gcmc_corrected"][i]
+        bc_params_array[li, lj] = result["bc_params"].to_dict()
+        
     # Convert to xarray Dataset
     gcmc_corrected = xr.Dataset(
         {
@@ -1305,7 +1347,7 @@ def bc_correction_grid_cell_hist_dask_2d(
 
     # Initialize arrays to hold the final data
     corrected_data = {
-        var: np.empty((31, 12, 31, len(reshaped_gcm.lat), len(reshaped_gcm.lon)))
+        var: np.empty((len(reshaped_gcm.year), len(reshaped_gcm.month), len(reshaped_gcm.day), len(reshaped_gcm.lat), len(reshaped_gcm.lon)))
         for var in var_list_w
     }
     bc_params_array = np.empty(
@@ -1443,8 +1485,11 @@ def correction_wrapper_future_pool(args):
         else config.target_variable
     )
     # Extract GCM data for this (lat, lon)
-    gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
-
+    # gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
+    # Index-based selection for GCM data
+    gcm_data = [_isel_point(reshaped_gcm[var], lat, lon).values for var in var_list_w]
+    # Index-based selection for params (dataset)
+    params_ds = _isel_point(bc_params_array, lat, lon)
     # # Find nearest indices
     # lat_array = reshaped_gcm.lat.values
     # lon_array = reshaped_gcm.lon.values
@@ -1455,21 +1500,26 @@ def correction_wrapper_future_pool(args):
     # Select bias correction parameters
     # params_data = bc_params_array[lat_idx, lon_idx]
     # ds_cell = bc_params_array.sel(lat=lat, lon=lon, method="nearest")
-    ds_cell = bc_params_array.sel(lat=lat, lon=lon)
+    # ds_cell = bc_params_array.sel(lat=lat, lon=lon)
 
     # For each variable, reshape the flattened data back to its original shape.
     params = {}
-    for var in ds_cell.data_vars:
-        # The flattened data is stored in a variable with a unique flattened dimension.
-        flat_data = ds_cell[var].values
-        # Retrieve the original shape from the variable's attributes.
-        original_shape = ds_cell[var].attrs.get("original_shape", None)
+    # for var in ds_cell.data_vars:
+    #     # The flattened data is stored in a variable with a unique flattened dimension.
+    #     flat_data = ds_cell[var].values
+    #     # Retrieve the original shape from the variable's attributes.
+    #     original_shape = ds_cell[var].attrs.get("original_shape", None)
+    #     if original_shape is None:
+    #         raise ValueError(f"Original shape not found for variable '{var}'.")
+    #     # Reshape the 1D (flattened) data back to its original shape.
+    #     reshaped_data = flat_data.reshape(original_shape)
+    #     params[var] = reshaped_data
+    for var in params_ds.data_vars:
+        flat_data = params_ds[var].values
+        original_shape = params_ds[var].attrs.get("original_shape", None)
         if original_shape is None:
             raise ValueError(f"Original shape not found for variable '{var}'.")
-        # Reshape the 1D (flattened) data back to its original shape.
-        reshaped_data = flat_data.reshape(original_shape)
-        params[var] = reshaped_data
-
+        params[var] = flat_data.reshape(original_shape)
     # Convert the dictionary to a SimpleNamespace so that we can access attributes like params_data.avdc_iter
     params_data = SimpleNamespace(**params)
 
@@ -1510,17 +1560,21 @@ def bc_correction_grid_cell_future_multiprocess(
 
     # Convert results back to xarray.Dataset
     corrected_data = {
-        var: np.empty((31, 12, 31, len(lat_values), len(lon_values)))
+        var: np.empty((len(gcm_future.year), len(gcm_future.month), len(gcm_future.day), len(lat_values), len(lon_values)))
         for var in variable
     }
 
     # Fill the arrays
+    # for result in results:
+    #     lat_idx = np.where(lat_values == result["lat"])[0][0]
+    #     lon_idx = np.where(lon_values == result["lon"])[0][0]
+    #     for i, var in enumerate(variable):
+    #         corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
     for result in results:
-        lat_idx = np.where(lat_values == result["lat"])[0][0]
-        lon_idx = np.where(lon_values == result["lon"])[0][0]
+        li = _grid_index(lat_values, result["lat"])
+        lj = _grid_index(lon_values, result["lon"])
         for i, var in enumerate(variable):
-            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
-
+            corrected_data[var][:, :, :, li, lj] = result["gcmc_corrected"][i]
     # Convert to xarray Dataset
     gcmc_corrected = xr.Dataset(
         {
@@ -1659,7 +1713,7 @@ def bc_correction_grid_cell_future_dask_2d(
     print("tasks done")
     # Initialize arrays to hold the final data
     corrected_data = {
-        var: np.empty((31, 12, 31, len(gcm_future.lat), len(gcm_future.lon)))
+        var: np.empty((len(gcm_future.year), len(gcm_future.month), len(gcm_future.day), len(gcm_future.lat), len(gcm_future.lon)))
         for var in variable
     }
 

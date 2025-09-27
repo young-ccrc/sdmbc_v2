@@ -46,7 +46,7 @@ import yaml  # type: ignore  # added
 from cdo import Cdo  # type: ignore
 from dask.distributed import Client  # type: ignore
 
-from config import config
+# from config import config
 from interpolation import regrid
 
 cdo = Cdo()
@@ -758,7 +758,7 @@ def main(config_path, var_interp, override_ncpus=None, override_mem=None):
     # Start Dask client
     client = setup_client(ncpus, mem_gb)
 
-    print("[INFO] Starting interpolation for variable:", var_interp)
+    # print("[INFO] Starting interpolation for variable:", var_interp)
     print(f"[INFO] CMIP6 root: {cfg['target_path']} (table={cfg['gname']})")
 
     # Inputs from YAML

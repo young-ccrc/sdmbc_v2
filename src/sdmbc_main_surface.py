@@ -29,7 +29,7 @@ import os
 import shutil
 import time  # Import the time module
 import warnings
-from multiprocessing import Pool, cpu_count
+# from multiprocessing import Pool, cpu_count
 from types import SimpleNamespace
 
 import dask  # type: ignore
@@ -45,6 +45,7 @@ from bc_grid_function import (
     bc_correction_grid_cell_future_multiprocess,
     bc_correction_grid_cell_hist_dask_2d,
     convert_bc_params_to_xarray,
+    process_tile,
 )
 
 # from data_preparation import   # type: ignore
@@ -55,6 +56,9 @@ from data_preparation import (
     load_and_combine_variables,
     load_preprocess_variable,
     validate_inputs,
+    expand_config_bounds_from_data,
+    determine_tiles,
+    split_domain,
 )
 
 # from analysis_plot import AnalysisBC  # type: ignore
@@ -116,37 +120,37 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def split_domain(lat_min, lat_max, lon_min, lon_max, n_lat_tiles, n_lon_tiles):
-    """
-    Split the spatial domain into smaller latitude and longitude tiles.
+# def split_domain(lat_min, lat_max, lon_min, lon_max, n_lat_tiles, n_lon_tiles):
+#     """
+#     Split the spatial domain into smaller latitude and longitude tiles.
 
-    Args:
-        lat_min (float): Minimum latitude of the domain.
-        lat_max (float): Maximum latitude of the domain.
-        lon_min (float): Minimum longitude of the domain.
-        lon_max (float): Maximum longitude of the domain.
-        n_lat_tiles (int): Number of latitude tiles.
-        n_lon_tiles (int): Number of longitude tiles.
+#     Args:
+#         lat_min (float): Minimum latitude of the domain.
+#         lat_max (float): Maximum latitude of the domain.
+#         lon_min (float): Minimum longitude of the domain.
+#         lon_max (float): Maximum longitude of the domain.
+#         n_lat_tiles (int): Number of latitude tiles.
+#         n_lon_tiles (int): Number of longitude tiles.
 
-    Returns:
-        list: List of dictionaries containing the bounds of each tile.
-    """
-    # Create ranges for latitude and longitude tiles
-    lat_ranges = np.linspace(lat_min, lat_max, n_lat_tiles + 1, endpoint=True)
-    lon_ranges = np.linspace(lon_min, lon_max, n_lon_tiles + 1, endpoint=True)
+#     Returns:
+#         list: List of dictionaries containing the bounds of each tile.
+#     """
+#     # Create ranges for latitude and longitude tiles
+#     lat_ranges = np.linspace(lat_min, lat_max, n_lat_tiles + 1, endpoint=True)
+#     lon_ranges = np.linspace(lon_min, lon_max, n_lon_tiles + 1, endpoint=True)
 
-    tiles = []
-    for i in range(n_lat_tiles):
-        for j in range(n_lon_tiles):
-            tiles.append(
-                {
-                    "lat_min": lat_ranges[i],
-                    "lat_max": lat_ranges[i + 1],
-                    "lon_min": lon_ranges[j],
-                    "lon_max": lon_ranges[j + 1],
-                }
-            )
-    return tiles
+#     tiles = []
+#     for i in range(n_lat_tiles):
+#         for j in range(n_lon_tiles):
+#             tiles.append(
+#                 {
+#                     "lat_min": lat_ranges[i],
+#                     "lat_max": lat_ranges[i + 1],
+#                     "lon_min": lon_ranges[j],
+#                     "lon_max": lon_ranges[j + 1],
+#                 }
+#             )
+#     return tiles
 
 
 def dict_to_simplenamespace(d):
@@ -230,6 +234,51 @@ def main(config_path, override_ncpus=None, override_mem=None):
     lat_range = (lat_min, lat_max)  # Adjust as needed
     lon_range = (lon_min, lon_max)  # Adjust as needed
 
+    
+    # =============== Load Obs ===============
+    # config should also consider the input and target path
+    file_paths_by_variable_obs = {}
+    if input_model == "reanalysis":
+        for variable in variables:
+            file_paths_by_variable_obs[variable] = generate_file_paths_obs(
+                config,
+                obs_path,
+                variable,
+                gname,
+                startyear_h,
+                endyear_h,
+            )
+    else:
+        for variable in variables:
+            file_paths_by_variable_obs[variable] = generate_file_paths(
+                config,
+                b_path,
+                variable,
+                infor,
+                gname,
+                period,
+                cinfor,
+                sinfor,
+                version,
+                startyear_h,
+                endyear_h,
+            )
+    # =============== Load obs end ===============
+    
+    lat_min, lat_max, lon_min, lon_max, lat_size, lon_size, lat_values, lon_values = (
+        expand_config_bounds_from_data(
+            lat_min,
+            lat_max,
+            lon_min,
+            lon_max,
+            file_paths_by_variable_obs[variables[0]][0],
+        )
+    )
+    
+    # Create a temporary folder for saving intermediate files
+    temp_dir = os.path.join(out_path, "temp_tiles_surface")
+    os.makedirs(temp_dir, exist_ok=True)
+    
     if config.bc_hist:
 
         b_path = obs_path
@@ -252,36 +301,6 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 endyear_h,
             )
         # =============== Load GCM end ===============
-
-        # =============== Load Obs ===============
-        # config should also consider the input and target path
-        file_paths_by_variable_obs = {}
-        if input_model == "reanalysis":
-            for variable in variables:
-                file_paths_by_variable_obs[variable] = generate_file_paths_obs(
-                    config,
-                    obs_path,
-                    variable,
-                    gname,
-                    startyear_h,
-                    endyear_h,
-                )
-        else:
-            for variable in variables:
-                file_paths_by_variable_obs[variable] = generate_file_paths(
-                    config,
-                    b_path,
-                    variable,
-                    infor,
-                    gname,
-                    period,
-                    cinfor,
-                    sinfor,
-                    version,
-                    startyear_h,
-                    endyear_h,
-                )
-        # =============== Load obs end ===============
 
         # Record the start time for this level
         start_time = time.time()
@@ -344,22 +363,26 @@ def main(config_path, override_ncpus=None, override_mem=None):
         )
         # =============== Load obs end ===============
 
-        # Create a temporary folder for saving intermediate files
-        temp_dir = os.path.join(out_path, "temp_tiles_surface")
-        os.makedirs(temp_dir, exist_ok=True)
-
         print("start dask bc correction")
         # Perform bias correction across the entire grid (all lat/lon pairs)
-        n_lat_tiles = 10
-        n_lon_tiles = 10
+        # n_lat_tiles = 10
+        # n_lon_tiles = 10
+    
+        # tiles = split_domain(
+        #     lat_min,
+        #     lat_max,
+        #     lon_min,
+        #     lon_max,
+        #     n_lat_tiles=n_lat_tiles,
+        #     n_lon_tiles=n_lon_tiles,
+        # )
 
+        n_lat_tiles, n_lon_tiles = determine_tiles(config, lat_size, lon_size)
         tiles = split_domain(
-            lat_min,
-            lat_max,
-            lon_min,
-            lon_max,
-            n_lat_tiles=n_lat_tiles,
-            n_lon_tiles=n_lon_tiles,
+            n_lat_tiles,
+            n_lon_tiles,
+            lat_values,
+            lon_values,
         )
 
         # To store all bc_params for later concatenation
@@ -368,15 +391,20 @@ def main(config_path, override_ncpus=None, override_mem=None):
         # for idx, tile in enumerate(tiles):
         for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
             try:
+                # Use index-based slices to avoid inclusive end ambiguity
+                lat_i0, lat_i1 = tile["lat_min_idx"], tile["lat_max_idx"]
+                lon_j0, lon_j1 = tile["lon_min_idx"], tile["lon_max_idx"]
+
                 lat_range = (tile["lat_min"], tile["lat_max"])
                 lon_range = (tile["lon_min"], tile["lon_max"])
-
-                # Slice GCM and Obs data for the tile
-                reshaped_gcm_delayed_tile = reshaped_gcm_delayed.sel(
-                    lat=slice(*lat_range), lon=slice(*lon_range)
+                # obs_tile = sliced_obs.sel(lat=slice(*lat_range), lon=slice(*lon_range))
+                # gcm_tile = sliced_gcm.sel(lat=slice(*lat_range), lon=slice(*lon_range))
+                # Slice by index (half-open) so dimensions match downstream arrays
+                reshaped_gcm_delayed_tile = reshaped_gcm_delayed.isel(
+                    lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
                 )
-                reshaped_obs_delayed_tile = reshaped_obs_delayed.sel(
-                    lat=slice(*lat_range), lon=slice(*lon_range)
+                reshaped_obs_delayed_tile = reshaped_obs_delayed.isel(
+                    lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
                 )
 
                 bc_corrected_gcm_hist_tile, bc_params_tile = (
@@ -388,7 +416,12 @@ def main(config_path, override_ncpus=None, override_mem=None):
                         config.startyear_h,
                     )
                 )
-
+                # bc_corrected_gcm_hist_tile, bc_params_tile = process_tile(
+                #     config,
+                #     gcm_tile,
+                #     obs_tile,
+                # )
+                
                 # Save each tile's bias-corrected output immediately to disk
                 output_file = f"{temp_dir}/bc_corrected_tile_2d_{idx}_{lat_range[0]}_{lat_range[1]}_{lon_range[0]}_{lon_range[1]}.nc"
                 output_params = f"{temp_dir}/bc_params_tile_2d_{idx}_{lat_range[0]}_{lat_range[1]}_{lon_range[0]}_{lon_range[1]}.nc"
@@ -401,10 +434,24 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 else:
                     print(f"File {output_file} already exists. Skipping...")
 
-                # Save the bc_params for each tile
-                obs_tile = sliced_obs.sel(lat=slice(*lat_range), lon=slice(*lon_range))
+                # Get matching coordinate arrays via the SAME index slice
+                obs_tile = sliced_obs.isel(
+                    lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
+                )
                 tile_lat = obs_tile["lat"].values
                 tile_lon = obs_tile["lon"].values
+                
+                # (Optional safety check)
+                if (
+                    tile_lat.shape[0] != bc_params_tile.shape[0]
+                    or tile_lon.shape[0] != bc_params_tile.shape[1]
+                ):
+                    raise ValueError(
+                        f"Tile {idx} coord size mismatch: "
+                        f"lat coords {tile_lat.shape[0]} vs params {bc_params_tile.shape[0]}, "
+                        f"lon coords {tile_lon.shape[0]} vs params {bc_params_tile.shape[1]}"
+                    )
+                    
                 ds_params = convert_bc_params_to_xarray(
                     config, bc_params_tile, tile_lat, tile_lon
                 )
@@ -615,14 +662,11 @@ def main(config_path, override_ncpus=None, override_mem=None):
         start_time = time.time()
         level = 0
         domain = split_domain(
-            lat_min,
-            lat_max,
-            lon_min,
-            lon_max,
-            n_lat_tiles=1,
-            n_lon_tiles=1,
+            1,
+            1,
+            lat_values,
+            lon_values,
         )
-
         sliced_gcm_future = load_and_combine_variables(
             config,
             domain[0],
@@ -653,9 +697,9 @@ def main(config_path, override_ncpus=None, override_mem=None):
         #         bc_params_array_loaded[i, j] = dict_to_simplenamespace(
         #             bc_params_array_loaded[i, j]
         #         )
-        # Create a temporary folder for saving intermediate files
-        temp_dir = os.path.join(out_path, "temp_tiles_surface")
-        os.makedirs(temp_dir, exist_ok=True)
+        # # Create a temporary folder for saving intermediate files
+        # temp_dir = os.path.join(out_path, "temp_tiles_surface")
+        # os.makedirs(temp_dir, exist_ok=True)
 
         output_params = f"{out_path}/bc_params_2d_{period}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.nc"
         bc_params_array_loaded = xr.load_dataset(output_params)
