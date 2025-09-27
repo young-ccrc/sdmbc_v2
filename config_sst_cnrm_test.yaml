@@ -4,17 +4,15 @@
 
 # ================= Input Paths =================
 # Paths to input data and output directories
-bc_hist_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2/Oday" # Historical bias correction data path
-bc_future_path: "/g/data/oi10/replicas/CMIP6/ScenarioMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2/Oday" #
-obs_path: "/g/data/w28/yk8692/input/era5/cnrm" # Path to ERA5 observation data
+obs_path: "/scratch/dm6/yk8692/sdmbc/test_han/regrid_obs_HK"
 obs_future_path: "/g/data/w28/yk8692/input/era5/cnrm" # Path to ERA5 observation data
-out_path: "/g/data/w28/yk8692/tests/calibration/cnrm_test" # Directory to save bias-corrected output
+out_path: "/g/data/w28/yk8692/tests/calibration/cnrm_esm_test" # Directory to save bias-corrected output
 
 # ================= Simulation Periods =================
 # Historical simulation settings
 bc_hist: True # Enable historical simulation (True: Yes, False: No)
-startyear_h: 1959 # Start year for historical simulation
-endyear_h: 1989 # End year for historical simulation
+startyear_h: 1994 # Start year for historical simulation
+endyear_h: 2014 # End year for historical simulation
 
 # Future simulation settings
 bc_future: False # Enable future simulation (True: Yes, False: No)
@@ -24,11 +22,11 @@ endyear_f: 2020 # End year for future simulation
 # ================= GCM (Global Climate Model) Information =================
 # Historical data settings
 infor: "Oday" # Data frequency (6hrLev: 3D data, Oday: 2D data)
-gname: "CNRM-CM6-1" # Model name
+gname: "CNRM-ESM2-1" # Model name
 period: "historical" # Simulation period (historical, validation, or future)
 cinfor: "r1i1p1f2" # Configuration information
 sinfor: "gn" # Spatial resolution
-version: "20180917" # Dataset version
+version: "20181206" # Dataset version
 
 # Future data settings
 scenario: "ssp370" # Climate scenario for future simulation (e.g., ssp126, ssp370)
@@ -45,7 +43,7 @@ elevel: 0 # Ending level for bias correction, 0 for the first level (2D)
 no_of_variables: 1 # Number of variables for bias correction (1 for 2D, 3 for 3D)
 no_of_iterations: 1 # Number of bias correction iterations
 correction_model: 4 # Correction method (1: mean, 2: variance, 3: nested, 4: multivariate)
-sub_daily_correction: False # Enable sub-daily bias correction (True: Yes, False: No)
+sub_daily_correction: True # Enable sub-daily bias correction (True: Yes, False: No)
 
 # ================= Spatial Selection =================
 # Latitude and longitude range for the selected area
@@ -58,6 +56,7 @@ lon_max: 360 # Maximum longitude
 # Upper and lower physical limits for variables (wind speed (m/s), temperature (K), specific humidity (g/kg), sea surface temperature (K))
 upper_limit: [190, 330, 100, 330] # Upper limits for variables
 lower_limit: [0.0001, 150, 0.0001, 270] # Lower limits for variables
+max_tile_size: 500 # maximum grid cells within each tile for bias correction depending on the memory of the machine, default=500
 
 # ================= Options =================
 save_bc_output: True # Save bias-corrected output (True: Yes, False: Save factors only)
