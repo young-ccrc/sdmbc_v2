@@ -23,12 +23,10 @@ transposes dimensions, creates a new dataset, copies attributes, changes values,
 """
 import argparse
 
-# Written by Youngil(Young) Kim
-# PhD Candidate
-# Water Research Centre
+# Written by Youngil Kim
 # Climate Change Research Centre
 # University of New South Wales
-# 2023-04-17
+# 2025-10-01
 # -----------------------------------------------------------------------------------------------------------------
 # Load pacakges ===================================
 import glob
@@ -528,23 +526,83 @@ def reformatsave_3d(bcf, var_new, var_old, y, input_files, out_path):
                 rename_dict_reformat,
             )[var_old]
 
-        # Load template variable lazily, then replace values at common times
-        # Target indexers
-        indexer = {"time": common}
-        if vdim is not None and vdim in tmpl_var.dims:
-            indexer[vdim] = ds_tmpl[vdim]
-        indexer["lat"] = tmpl_var.lat
-        indexer["lon"] = tmpl_var.lon
+        # ------------------------------
+        # Partial-domain safe replacement
+        # ------------------------------
+        # Bias-corrected file may cover only a sub-region (lat/lon subset). We must
+        # restrict the assignment to intersecting coordinates to avoid shape mismatch.
 
-        # Ensure bc_slice matches indexer dims
-        for d in list(indexer.keys()):
-            if d not in bc_slice.dims:
-                # try to expand (e.g., if vdim missing after interpolation failure)
-                bc_slice = bc_slice.expand_dims({d: indexer[d]})
+        def _match_subset_coords(src_vals, target_vals, tol=1e-6):
+            """Return coordinate values from src_vals that exist in target_vals within tol.
 
-        # Perform replacement
-        data_var = tmpl_var.load()
-        data_var.loc[indexer] = bc_slice.values
+            Uses vectorized absolute difference; falls back to exact matching if tol == 0.
+            Returns a numpy array of matched coordinate values preserving the order in src_vals.
+            """
+            src_vals = np.asarray(src_vals)
+            target_vals = np.asarray(target_vals)
+            matches = []
+            for v in src_vals:
+                # Find closest target coordinate
+                j = int(np.argmin(np.abs(target_vals - v)))
+                if abs(target_vals[j] - v) <= tol:
+                    matches.append(target_vals[j])
+                else:
+                    # Coordinate outside tolerance – skip (not present in template)
+                    pass
+            return np.array(matches)
+
+        # Determine intersecting lat/lon with a conservative tolerance (fraction of grid spacing)
+        if bc_slice.lat.size > 1:
+            dlat = float(np.min(np.abs(np.diff(bc_slice.lat.values))))
+        else:
+            dlat = float(np.min(np.abs(np.diff(tmpl_var.lat.values)))) if tmpl_var.lat.size > 1 else 1.0
+        if bc_slice.lon.size > 1:
+            dlon = float(np.min(np.abs(np.diff(bc_slice.lon.values))))
+        else:
+            dlon = float(np.min(np.abs(np.diff(tmpl_var.lon.values)))) if tmpl_var.lon.size > 1 else 1.0
+        tol_lat = 0.05 * dlat
+        tol_lon = 0.05 * dlon
+
+        common_lat = _match_subset_coords(bc_slice.lat.values, tmpl_var.lat.values, tol=tol_lat)
+        common_lon = _match_subset_coords(bc_slice.lon.values, tmpl_var.lon.values, tol=tol_lon)
+
+        if common_lat.size == 0 or common_lon.size == 0:
+            print(
+                f"[WARN] No overlapping spatial coordinates between bias-corrected slice and template for file {os.path.basename(fp)}. Skipping spatial assignment."
+            )
+            ds_tmpl.close()
+            continue
+
+        # Reduce bc_slice to intersection only (preserving order relative to template)
+        # We build an indexer dict for selecting from bc_slice by value.
+        bc_slice_sub = bc_slice.sel(lat=common_lat, lon=common_lon)
+
+        # Now perform replacement only on that sub-region
+        data_var = tmpl_var.load()  # load to allow in-place numpy assignment
+
+        # Build indexer for data_var.loc using overlapping coordinates & times
+        loc_indexer = {"time": common, "lat": common_lat, "lon": common_lon}
+        if vdim is not None and vdim in data_var.dims:
+            # Align vertical coordinate already handled; require full level coverage match
+            loc_indexer[vdim] = data_var[vdim]
+            # Ensure bc_slice_sub has vdim; if missing (e.g., SST), expand
+            if vdim not in bc_slice_sub.dims:
+                bc_slice_sub = bc_slice_sub.expand_dims({vdim: data_var[vdim]})
+
+        # Ensure ordering consistent with loc assignment (time, vdim?, lat, lon)
+        ordered_dims = [d for d in ("time", vdim, "lat", "lon") if d and d in bc_slice_sub.dims]
+        bc_slice_sub = bc_slice_sub.transpose(*ordered_dims)
+
+        # Safety: shapes must align except for excluded template regions
+        expected_shape = tuple(len(loc_indexer[d]) for d in ordered_dims)
+        if bc_slice_sub.values.shape != expected_shape:
+            raise ValueError(
+                f"Shape mismatch after intersection for {var_old} in file {os.path.basename(fp)}: "
+                f"bc_slice_sub {bc_slice_sub.values.shape} vs expected {expected_shape}."
+            )
+
+        # Assignment (only subset replaced)
+        data_var.loc[loc_indexer] = bc_slice_sub.values
         data_var.attrs["history"] = "Bias-corrected and reformatted data"
         ds_tmpl[var_old] = data_var
 
@@ -614,6 +672,8 @@ def reformat_and_save_3d(
 
     # Loop through the input variables and years to reformat and save the data
     # Multiprocessing has not been used due to memory issue.
+    # Track successful outputs for optional cleanup
+    produced_files = []
     for k in range(len(input_vargcm)):
         for y in range(startyear, endyear + 1):
             year = str(y)
@@ -650,8 +710,36 @@ def reformat_and_save_3d(
             # Save data
             for dataset, output_filename in results:
                 print(f"Save 3d to netcdf {output_filename}")
-                dataset.load().to_netcdf(output_filename)
+                # Apply compression (default level 5 or override via config['compression_level'])
+                # comp_level = config.get("compression_level", 5)
+                comp_level = 5
+                encoding = {}
+                for v in dataset.data_vars:
+                    # Preserve existing encoding but enforce compression
+                    enc_prev = dict(dataset[v].encoding) if hasattr(dataset[v], "encoding") else {}
+                    # Remove automatic chunk size hints that can conflict
+                    enc_prev.pop("chunksizes", None)
+                    encoding[v] = {**enc_prev, "zlib": True, "complevel": comp_level}
+                # Coordinates: avoid attempting to compress scalar/index coords unnecessarily
+                dataset.load().to_netcdf(output_filename, encoding=encoding)
                 print(f"Completed {output_filename}")
+                produced_files.append(output_filename)
+
+    # Optional cleanup: remove bias-corrected input tiles if configured
+    if config.get("cleanup_bc_inputs", False):
+        try:
+            # Remove only the lev files we actually opened (ignore missing quietly)
+            for idx in range(0, tlevel + 1):
+                pattern = os.path.join(bc_path, f"bc_corrected_3d_lev_{idx}_*.nc")
+                for f in glob.glob(pattern):
+                    if os.path.isfile(f):
+                        try:
+                            os.remove(f)
+                            print(f"[CLEANUP] Removed {f}")
+                        except Exception as e_rm:
+                            print(f"[CLEANUP WARN] Could not remove {f}: {e_rm}")
+        except Exception as e:
+            print(f"[CLEANUP ERROR] Cleanup encountered an issue: {e}")
 
 
 def add_lat_lon_bnds(input_file, output_file):
@@ -692,37 +780,141 @@ def add_lat_lon_bnds(input_file, output_file):
     ds.close()
 
 
-def reformat_and_save_2d(input_path, original_file, output_file, remap_weights_file):
-    """
-    Regrid the bias-corrected input data to the original grid using CDO.
+def reformat_and_save_2d(config, input_path, original_file, output_file, remap_weights_file):
+    """Integrate a (possibly partial-domain) 2D bias-corrected field into the
+    original file's grid.
+
+    Logic:
+      1. Open bias-corrected dataset (bc_ds) & template (tmpl_ds).
+      2. If bc lat/lon already subset of template and identical points, copy only subset.
+      3. Else (grids differ / need interpolation), perform CDO regrid on the full field.
+      4. Write final merged dataset to output_file with compression.
 
     Args:
-        input_path (str): Path to the bias-corrected input netCDF file.
-        original_file (str): Path to the original netCDF file to use as a grid reference.
-        output_file (str): Path to the output netCDF file after regridding.
-        remap_weights_file (str): Path to store remapping weights generated during regridding.
-
-    Returns:
-        None: Saves the regridded netCDF file.
+        input_path: path to bias-corrected 2D nc (may be subset spatially)
+        original_file: path to original reference nc (full domain)
+        output_file: final merged output path
+        remap_weights_file: path for CDO weights (if regridding is required)
     """
+    varname = None
+    with xr.open_dataset(input_path) as bc_ds, xr.open_dataset(original_file) as tmpl_ds:
+        # Guess variable (first non-coordinate var)
+        cand_vars = [v for v in bc_ds.data_vars if v not in bc_ds.coords]
+        if not cand_vars:
+            raise ValueError(f"No data variables found in {input_path}")
+        varname = cand_vars[0]
 
-    # Add lat_bnds and lon_bnds to the input file if necessary
-    input_with_bnds = input_path.replace(".nc", "_with_bnds.nc")
-    add_lat_lon_bnds(input_path, input_with_bnds)
+        # Coordinate name detection
+        def _detect_coord(ds, candidates):
+            for name in candidates:
+                if name in ds.coords:
+                    return name
+            # try case-insensitive match
+            lower_map = {c.lower(): c for c in ds.coords}
+            for name in candidates:
+                if name.lower() in lower_map:
+                    return lower_map[name.lower()]
+            return None
 
-    # Generate remapping weights
-    print("Generating remap weights...")
-    cdo.genbil(original_file, input=input_with_bnds, output=remap_weights_file)
+        lat_candidates = ["lat", "latitude", "Latitude", "nav_lat", "y"]
+        lon_candidates = ["lon", "longitude", "Longitude", "nav_lon", "x"]
+        bc_lat_name = _detect_coord(bc_ds, lat_candidates)
+        bc_lon_name = _detect_coord(bc_ds, lon_candidates)
+        tmpl_lat_name = _detect_coord(tmpl_ds, lat_candidates)
+        tmpl_lon_name = _detect_coord(tmpl_ds, lon_candidates)
+        if not all([bc_lat_name, bc_lon_name, tmpl_lat_name, tmpl_lon_name]):
+            raise ValueError(
+                "Could not detect latitude/longitude coordinate names in one of the datasets. "
+                f"Detected -> bc: ({bc_lat_name}, {bc_lon_name}), tmpl: ({tmpl_lat_name}, {tmpl_lon_name})"
+            )
 
-    # Regrid the bias-corrected data to match the grid of the original file
-    print("Regridding the input data to the original grid...")
-    cdo.remap(
-        f"{original_file},{remap_weights_file}",
-        input=input_with_bnds,
-        output=output_file,
-    )
+        # Quick path: identical full grid (simple replace)
+        same_lat = bc_ds[bc_lat_name].identical(tmpl_ds[tmpl_lat_name])
+        same_lon = bc_ds[bc_lon_name].identical(tmpl_ds[tmpl_lon_name])
+        partial_subset = False
+        if not (same_lat and same_lon):
+            # Check if bc is a strict subset with matching coordinate values
+            bc_lat = bc_ds[bc_lat_name].values
+            bc_lon = bc_ds[bc_lon_name].values
+            tmpl_lat = tmpl_ds[tmpl_lat_name].values
+            tmpl_lon = tmpl_ds[tmpl_lon_name].values
+            subset_lat = np.isin(bc_lat, tmpl_lat)
+            subset_lon = np.isin(bc_lon, tmpl_lon)
+            if subset_lat.all() and subset_lon.all():
+                partial_subset = True
+            else:
+                # Need regridding
+                print("[2D] Grids differ; performing regrid via CDO ...")
+                input_with_bnds = input_path.replace(".nc", "_with_bnds.nc")
+                add_lat_lon_bnds(input_path, input_with_bnds)
+                cdo.genbil(original_file, input=input_with_bnds, output=remap_weights_file)
+                cdo.remap(
+                    f"{original_file},{remap_weights_file}",
+                    input=input_with_bnds,
+                    output=output_file,
+                )
+                print(f"[2D] Regridding completed: {input_with_bnds} -> {output_file}")
+                return
 
-    print(f"Regridding completed: {input_with_bnds} -> {output_file}")
+        # Build output dataset starting from template
+        out = tmpl_ds.load()  # ensure writeable
+        if same_lat and same_lon:
+            print("[2D] Full-domain replacement.")
+            out[varname].values = bc_ds[varname].values
+        elif partial_subset:
+            print("[2D] Partial subset merge.")
+            # Determine indices of bc coords inside template
+            lat_map = {val: i for i, val in enumerate(out[tmpl_lat_name].values)}
+            lon_map = {val: j for j, val in enumerate(out[tmpl_lon_name].values)}
+            lat_idx = [lat_map[v] for v in bc_ds[bc_lat_name].values]
+            lon_idx = [lon_map[v] for v in bc_ds[bc_lon_name].values]
+            # Broadcast assignment respecting time if present
+            if "time" in out[varname].dims and "time" in bc_ds[varname].dims:
+                out_vals = out[varname].values
+                bc_vals = bc_ds[varname].values
+                # Expect shape (time, lat_subset, lon_subset) or (lat_subset, lon_subset)
+                if out_vals.ndim == 3:  # (time, lat, lon)
+                    for ii, li in enumerate(lat_idx):
+                        for jj, lj in enumerate(lon_idx):
+                            out_vals[:, li, lj] = bc_vals[:, ii, jj]
+                elif out_vals.ndim == 2:  # (lat, lon)
+                    for ii, li in enumerate(lat_idx):
+                        for jj, lj in enumerate(lon_idx):
+                            out_vals[li, lj] = bc_vals[ii, jj]
+                else:
+                    raise ValueError(
+                        f"Unexpected dimensionality for variable {varname}: {out_vals.shape}"
+                    )
+                out[varname].values = out_vals
+            else:
+                # No time dimension present
+                for ii, li in enumerate(lat_idx):
+                    for jj, lj in enumerate(lon_idx):
+                        out[varname].values[li, lj] = bc_ds[varname].values[ii, jj]
+        else:
+            # Should not reach here
+            raise RuntimeError("Unhandled 2D merging path")
+
+        # Compression on write
+        comp_level = 5
+        encoding = {
+            varname: {"zlib": True, "complevel": comp_level}
+        }
+        out.to_netcdf(output_file, encoding=encoding)
+        print(f"[2D] Merged output written: {output_file}")
+
+    # Optional cleanup of the bias-corrected 2D input file & intermediate with_bnds
+    if config.get("cleanup_bc_inputs", False):
+        try:
+            if os.path.isfile(input_path):
+                os.remove(input_path)
+                print(f"[CLEANUP] Removed 2D bias-corrected input {input_path}")
+            with_bnds = input_path.replace(".nc","_with_bnds.nc")
+            if os.path.isfile(with_bnds):
+                os.remove(with_bnds)
+                print(f"[CLEANUP] Removed temporary {with_bnds}")
+        except Exception as e:
+            print(f"[CLEANUP WARN] 2D cleanup issue: {e}")
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -829,7 +1021,7 @@ def main(config_path, var_interp, override_ncpus=None, override_mem=None):
         remap_weights_file = f"{out_path}/remap_weights_{target_variable[0]}_{startyear_h}_{endyear_h}.nc"
         output_file = f"{out_path}/{target_variable[0]}_{cfg['infor']}_{cfg['gname']}_{cfg['period']}_{cfg['cinfor']}_{cfg['sinfor']}_{startyear_h}0101-{endyear_h}1231.nc"
         reformat_and_save_2d(
-            input_files[0], target_files[0], output_file, remap_weights_file
+            cfg, input_files[0], target_files[0], output_file, remap_weights_file
         )
         print("Finish 2D reformatting")
 

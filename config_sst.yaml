@@ -13,7 +13,7 @@ out_path: "/g/data/w28/yk8692/tests/access/calibration" # Directory to save bias
 
 # ================= Simulation Periods =================
 # Historical simulation settings
-bc_hist: True # Enable historical simulation (True: Yes, False: No)
+bc_hist: False # Enable historical simulation (True: Yes, False: No)
 startyear_h: 1959 # Start year for historical simulation
 endyear_h: 1989 # End year for historical simulation
 
@@ -46,7 +46,7 @@ elevel: 0 # Ending level for bias correction, 0 for the first level (2D)
 no_of_variables: 1 # Number of variables for bias correction (1 for 2D, 3 for 3D)
 no_of_iterations: 1 # Number of bias correction iterations
 correction_model: 4 # Correction method (1: mean, 2: variance, 3: nested, 4: multivariate)
-sub_daily_correction: False # Enable sub-daily bias correction (True: Yes, False: No)
+sub_daily_correction: True # Enable sub-daily bias correction (True: Yes, False: No)
 
 # ================= Spatial Selection =================
 # Latitude and longitude range for the selected area
@@ -59,16 +59,12 @@ lon_max: 360 # Maximum longitude
 # Upper and lower physical limits for variables (wind speed (m/s), temperature (K), specific humidity (g/kg), sea surface temperature (K))
 upper_limit: [190, 330, 100, 330] # Upper limits for variables
 lower_limit: [0.0001, 150, 0.0001, 270] # Lower limits for variables
+max_tile_size: 500 # maximum grid cells within each tile for bias correction depending on the memory of the machine
 
 # ================= Options =================
 save_bc_output: True # Save bias-corrected output (True: Yes, False: Save factors only)
-reformat_to_original: False # Reformat output to original format (True: Yes, False: No)
+cleanup_bc_inputs: True # remove bias-corrected intermediate files after reformatting
 
-# if reformat is True
+# Input file information for reformatting
 archive_roots: ["/g/data/oi10/replicas/CMIP6", "/g/data/fs38/publications/CMIP6"]
 var_to_table: {"hus":"6hrLev", "ta":"6hrLev", "ua":"6hrLev", "va":"6hrLev", "tos":"Oday", "ps":"Amon"}
-
-# ================= Usage =================
-# Edit the above parameters as needed. Save the file and pass its path to the script as follows:
-# python sdmbc_hist_main.py --yp /path/to/config.yaml
-# Ensure all file paths and variable names are correct. Refer to documentation for further details.

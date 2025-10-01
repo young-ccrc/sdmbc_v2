@@ -314,7 +314,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
         lat_values,
         lon_values,
     )
-
+    # print('tiles', tiles)
     domain = split_domain(
         n_lat_tiles=1,
         n_lon_tiles=1,
@@ -325,8 +325,8 @@ def main(config_path, override_ncpus=None, override_mem=None):
     for level in range(slevel, elevel + 1):
         # Record the start time for this level
         start_time = time.time()
-        lat_range = (lat_min, lat_max)
-        lon_range = (lon_min, lon_max)
+        # lat_range = (lat_min, lat_max)
+        # lon_range = (lon_min, lon_max)
         print(f"Starting processing for level {level}")
 
         temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{level}")
@@ -392,22 +392,29 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 #             startyear_h,
                 #             endyear_h,
                 #         )
+                # lat_range = (tile["lat_min"], tile["lat_max"])
+                # lon_range = (tile["lon_min"], tile["lon_max"])
+                lat_i0, lat_i1 = tile["lat_min_idx"], tile["lat_max_idx"]
+                lon_j0, lon_j1 = tile["lon_min_idx"], tile["lon_max_idx"]
+                # print('lat_i0, lat_i1, lon_j0, lon_j1', lat_i0, lat_i1, lon_j0, lon_j1)
                 lat_range = (tile["lat_min"], tile["lat_max"])
                 lon_range = (tile["lon_min"], tile["lon_max"])
+                # print(f"Tile {idx}: lat {lat_range}, lon {lon_range}")
                 # try:
                 # Define output file paths
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
                 output_params = f"{temp_dir}/bc_params_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
 
-                obs_tile = sliced_obs.sel(lat=slice(*lat_range), lon=slice(*lon_range))
-                gcm_tile = sliced_gcm.sel(lat=slice(*lat_range), lon=slice(*lon_range))
+                obs_tile = sliced_obs.isel(lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1))
+                gcm_tile = sliced_gcm.isel(lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1))
                 # # Check if both output files already exist
                 # if os.path.exists(output_file) and os.path.exists(output_params):
                 #     print(
                 #         f"Both output file and params for tile {idx}, level {level} already exist. Skipping..."
                 #     )
                 #     continue  # Skip processing this tile
-
+                # print('obs_tile', obs_tile)
+                # print('gcm_tile', gcm_tile)
                 # Process the tile if either output is missing
                 print(f"Processing tile {idx}, level {level}...")
                 bc_corrected_gcm_hist_tile, bc_params_tile = process_tile(
@@ -429,6 +436,18 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 # Assume each tile hn be extracted from obs_tile or gcm_tile.
                 tile_lat = obs_tile["lat"].values
                 tile_lon = obs_tile["lon"].values
+                
+                # (Optional safety check)
+                if (
+                    tile_lat.shape[0] != bc_params_tile.shape[0]
+                    or tile_lon.shape[0] != bc_params_tile.shape[1]
+                ):
+                    raise ValueError(
+                        f"Tile {idx} coord size mismatch: "
+                        f"lat coords {tile_lat.shape[0]} vs params {bc_params_tile.shape[0]}, "
+                        f"lon coords {tile_lon.shape[0]} vs params {bc_params_tile.shape[1]}"
+                    )
+                    
                 ds_params = convert_bc_params_to_xarray(
                     config, bc_params_tile, tile_lat, tile_lon
                 )
@@ -635,17 +654,21 @@ def main(config_path, override_ncpus=None, override_mem=None):
                     )
                 # Define output file paths
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_{period_f}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+                
+                lat_i0, lat_i1 = tile["lat_min_idx"], tile["lat_max_idx"]
+                lon_j0, lon_j1 = tile["lon_min_idx"], tile["lon_max_idx"]
+
                 lat_range = (tile["lat_min"], tile["lat_max"])
                 lon_range = (tile["lon_min"], tile["lon_max"])
 
                 if os.path.exists(output_file):
                     print(f"File {output_file} already exists. Skipping...")
                 else:
-                    obs_tile = sliced_obs.sel(
-                        lat=slice(*lat_range), lon=slice(*lon_range)
+                    obs_tile = sliced_obs.isel(
+                        lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
                     )
-                    gcm_tile = sliced_gcm.sel(
-                        lat=slice(*lat_range), lon=slice(*lon_range)
+                    gcm_tile = sliced_gcm.isel(
+                        lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
                     )
                     bc_corrected_gcm_future_tile = process_tile_future(
                         config,
@@ -775,8 +798,8 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 )
 
         # Remove the temporary directory and its contents
-        # shutil.rmtree(temp_dir)
-        # print("Intermediate files deleted.")
+        shutil.rmtree(temp_dir)
+        print("Intermediate files deleted.")
 
         # Log the time taken for this level
         end_time = time.time()
@@ -784,21 +807,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
             end_time - start_time
         ) / 60  # Convert seconds to minutes
         print(f"Completed processing in {elapsed_time_minutes:.2f} minutes")
-
-    # if config.draw_figure:
-    #     if bc_boundary == "lateral":
-    #         print("Drawing figures")
-    #         # print("K-S test has been included")
-    #         # bottom level test for 3d field
-    #         level = 0
-    #         if config.bc_hist:
-    #             save_figure_3d(
-    #                 file_paths_by_variable_gcm, file_paths_by_variable_obs, level
-    #             )
-    #         else:
-    #             save_figure_3d(file_paths_by_variable_gcm, out_path, level)
-    #         print("Finish 3d field")
-
+        
 
 if __name__ == "__main__":
     # args = parse_arguments()

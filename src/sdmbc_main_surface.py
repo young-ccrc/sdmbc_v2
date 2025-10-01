@@ -636,25 +636,6 @@ def main(config_path, override_ncpus=None, override_mem=None):
         #     )
         #     print("Finish 2d field")
 
-        if config.reformat_to_original:
-            print("Start reformatting")
-            # Dynamically construct the module folder path relative to the main script
-            # module_folder = os.path.join(os.path.dirname(__file__), "modules")
-            module_name = (
-                "reformat_gcm2origin"  # The Python file name without the .py extension
-            )
-
-            # Add the module folder to sys.path if it's not already there
-            # if module_folder not in os.sys.path:
-            #     os.sys.path.append(module_folder)
-
-            # Import the module dynamically and run
-            try:
-                reformat_module = importlib.import_module(module_name)
-                reformat_module.main()  # Assuming the .py file has a main() function
-            except Exception as e:
-                print(f"Failed to run the module '{module_name}': {e}")
-
     if (
         config.bc_future
     ):  # ========================= future bias correction =========================
@@ -901,24 +882,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
         #     )
         #     print("Finish 2d field")
 
-        if config.reformat_to_original:
-            print("Start reformatting")
-            # Dynamically construct the module folder path relative to the main script
-            # module_folder = os.path.join(os.path.dirname(__file__), "modules")
-            module_name = (
-                "reformat_gcm2origin"  # The Python file name without the .py extension
-            )
-
-            # Add the module folder to sys.path if it's not already there
-            # if module_folder not in os.sys.path:
-            #     os.sys.path.append(module_folder)
-
-            # Import the module dynamically and run
-            try:
-                reformat_module = importlib.import_module(module_name)
-                reformat_module.main()  # Assuming the .py file has a main() function
-            except Exception as e:
-                print(f"Failed to run the module '{module_name}': {e}")
+    
 
 
 if __name__ == "__main__":
