@@ -1,9 +1,55 @@
-numpy
-dask
-xarray
-pandas
-pyyaml
-tqdm
-matplotlib
-scipy
-cartopy
+# ============================================================
+# SDMBCv2 - Sub-Daily Multivariate Bias Correction Version 2
+# Environment requirements
+# Tested with Python >= 3.11 on Linux (NCI Gadi)
+# Install using:
+#     pip install -r requirements.txt
+# ============================================================
+
+# --- Core scientific stack ---
+numpy>=1.26
+scipy>=1.11
+pandas>=2.1
+xarray>=2023.12
+netCDF4>=1.6
+cftime>=1.6
+bottleneck>=1.3
+numba>=0.58
+
+# --- Parallel / distributed computation ---
+dask[distributed]>=2024.1
+toolz>=0.12
+tqdm>=4.66
+
+# --- Configuration and utilities ---
+PyYAML>=6.0
+pathlib>=1.0
+typing_extensions>=4.8
+
+# --- Climate and geospatial utilities ---
+xesmf>=0.7           # regridding (used in reformat_gcm2origin)
+xclim>=0.46          # climate indices / CF compliance (optional)
+rioxarray>=0.15
+geopandas>=0.14
+shapely>=2.0
+cartopy>=0.22
+
+# --- File and system IO ---
+cdo>=1.6             # Python-Cdo interface (requires CDO binary)
+fsspec>=2023.9       # filesystem backend for xarray / Dask
+zarr>=2.16           # optional: chunked NetCDF/Zarr storage
+
+# --- Plotting (for diagnostics/validation scripts) ---
+matplotlib>=3.8
+seaborn>=0.12
+
+# --- Packaging / installation helpers ---
+setuptools>=68
+wheel>=0.41
+
+# ============================================================
+# Notes:
+# - 'cdo' requires the CDO command-line tool installed separately.
+# - Optional modules (xclim, cartopy, geopandas) enhance visualization
+#   and spatial processing but are not strictly mandatory for batch runs.
+# ============================================================
