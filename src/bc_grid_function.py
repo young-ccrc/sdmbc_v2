@@ -19,9 +19,12 @@ import logging
 import os
 from multiprocessing import Pool, cpu_count
 from types import SimpleNamespace
+import uuid, tempfile
 
 import dask  # type: ignore
 import dask.array as da  # type: ignore
+from dask.distributed import Lock
+
 import numpy as np  # type: ignore
 import pandas as pd  # type: ignore
 import xarray as xr  # climate data manipulation library  # type: ignore
@@ -77,6 +80,39 @@ def _isel_point(obj, lat, lon, tol=None):
     lat_idx = _grid_index(obj.lat.values, lat, tol)
     lon_idx = _grid_index(obj.lon.values, lon, tol)
     return obj.isel(lat=lat_idx, lon=lon_idx)
+
+
+def _atomic_to_netcdf(ds, final_path, engine="netcdf4"):
+    """
+    Single-writer, atomic NetCDF write guarded by a distributed lock.
+    Loads ds to memory to avoid Dask's store graph during write.
+    """
+    os.makedirs(os.path.dirname(final_path), exist_ok=True)
+    lock = Lock(name=f"nc-write::{final_path}")  # lock on final path
+    tmp_path = os.path.join(os.path.dirname(final_path), f".{uuid.uuid4().hex}.tmp.nc")
+
+    with lock:
+        if os.path.exists(final_path):
+            return final_path
+        try:
+            # Ensure no dask arrays remain; avoid dask.store() path
+            if isinstance(ds, xr.Dataset):
+                ds = ds.unify_chunks()  # safe even if not chunked
+                ds = ds.load()
+            else:
+                # DataArray or other
+                ds = ds.load()
+
+            # Plain netCDF4 write (no compute=), then atomic rename
+            ds.to_netcdf(tmp_path, engine=engine)
+            os.replace(tmp_path, final_path)
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+    return final_path
 
 
 def correction_wrapper(config, gcm_data, obs_data):
@@ -135,7 +171,7 @@ def process_grid_cell(config, lat, lon, reshaped_gcm, reshaped_obs):
     # Use index-based selection to avoid .sel() KeyErrors on tile edges
     gcm_data = [_isel_point(reshaped_gcm[var], lat, lon).values for var in var_list_w]
     obs_data = [_isel_point(reshaped_obs[var], lat, lon).values for var in var_list_w]
-    
+
     # Apply the correction
     gcmc_corrected, bc_params = correction_wrapper(config, gcm_data, obs_data)
 
@@ -169,16 +205,28 @@ def process_grid_cell_future(config, lat, lon, reshaped_gcm, bc_params_array):
     # gcm_data = [reshaped_gcm[var].sel(lat=lat, lon=lon).values for var in var_list_w]
     # Use index-based selection to avoid .sel() KeyErrors on tile edges
     gcm_data = [_isel_point(reshaped_gcm[var], lat, lon).values for var in var_list_w]
-    
-    # Find the nearest latitude and longitude indices in reshaped_gcm_delayed_f
-    lat_array = reshaped_gcm.lat.values
-    lon_array = reshaped_gcm.lon.values
 
-    lat_idx = (np.abs(lat_array - lat)).argmin()  # Index of the nearest latitude
-    lon_idx = (np.abs(lon_array - lon)).argmin()  # Index of the nearest longitude
+    # # Find the nearest latitude and longitude indices in reshaped_gcm_delayed_f
+    # lat_array = reshaped_gcm.lat.values
+    # lon_array = reshaped_gcm.lon.values
+
+    # lat_idx = (np.abs(lat_array - lat)).argmin()  # Index of the nearest latitude
+    # lon_idx = (np.abs(lon_array - lon)).argmin()  # Index of the nearest longitude
 
     # Select the corresponding value in bc_params_array_loaded
-    params_data = bc_params_array[lat_idx, lon_idx]
+    # params_data = bc_params_array[lat_idx, lon_idx]
+    params_ds = _isel_point(bc_params_array, lat, lon)
+    # For each variable, reshape the flattened data back to its original shape.
+    params = {}
+    for var in params_ds.data_vars:
+        flat_data = params_ds[var].values
+        original_shape = params_ds[var].attrs.get("original_shape", None)
+        if original_shape is None:
+            raise ValueError(f"Original shape not found for variable '{var}'.")
+        params[var] = flat_data.reshape(original_shape)
+    # Convert the dictionary to a SimpleNamespace so that we can access attributes like params_data.avdc_iter
+    params_data = SimpleNamespace(**params)
+
     # Apply the correction
     gcmc_corrected = correction_wrapper_future(config, gcm_data, params_data)
 
@@ -741,17 +789,18 @@ def process_tile_future(
     #             )
 
     # Perform bias correction across the tile
-    # bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_dask(
-    #     reshaped_gcm_delayed,
-    #     bc_params_array_loaded,
-    #     var_list_w,
-    # )
-    bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_multiprocess(
+    bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_dask(
         config,
         reshaped_gcm_delayed,
         bc_params_array_loaded,
         var_list_w,
     )
+    # bc_corrected_gcm_future_tile = bc_correction_grid_cell_future_multiprocess(
+    #     config,
+    #     reshaped_gcm_delayed,
+    #     bc_params_array_loaded,
+    #     var_list_w,
+    # )
 
     if config.sub_daily_correction:
         bc_corrected_gcm_future = future_subdaily_correction(
@@ -782,7 +831,7 @@ def bc_correction_grid_cell_future_dask(
     config,
     gcm_future,
     bc_params_array,
-    var_list_w,
+    variable,
 ):
     """
     Perform daily bias correction for future GCM data across all grid cells in parallel using Dask.
@@ -794,12 +843,16 @@ def bc_correction_grid_cell_future_dask(
         bc_params_array: Bias correction parameters.
         startyear_f (int): Start year of the future period.
         endyear_f (int): End year of the future period.
-        var_list_w (list of str): List of variable names to be corrected.
+        variable (list of str): List of variable names to be corrected.
         sliced_gcm_future (xarray.Dataset): Sliced GCM data.
 
     Returns:
         xarray.Dataset: Bias-corrected daily GCM data for the future.
     """
+
+    # Extract lat/lon values
+    lat_values = gcm_future.lat.values
+    lon_values = gcm_future.lon.values
 
     # grid_cells = list(itertools.product(gcm_future.lat.values, gcm_future.lon.values))
     # batch_size = 20  # Process 20 grid cells at a time
@@ -811,8 +864,10 @@ def bc_correction_grid_cell_future_dask(
     # ]
     # # Generate tasks for each grid cell
     tasks = [
-        process_grid_cell_future(config, lat, lon, gcm_future, bc_params_array)
-        for lat, lon in itertools.product(gcm_future.lat.values, gcm_future.lon.values)
+        dask.delayed(process_grid_cell_future)(
+            config, lat, lon, gcm_future, bc_params_array
+        )
+        for lat, lon in itertools.product(lat_values, lon_values)
     ]
 
     # Compute all tasks in parallel at the end
@@ -823,22 +878,36 @@ def bc_correction_grid_cell_future_dask(
 
     # Initialize arrays to hold the final data
     corrected_data = {
-        var: np.empty((31, 12, 31, len(gcm_future.lat), len(gcm_future.lon)))
-        for var in var_list_w
+        var: np.empty(
+            (
+                len(gcm_future.year),
+                len(gcm_future.month),
+                len(gcm_future.day),
+                len(lat_values),
+                len(lon_values),
+            )
+        )
+        for var in variable
     }
 
-    # Fill the arrays with data from results
+    # # Fill the arrays with data from results
+    # for result in results:
+    #     lat_idx = np.where(gcm_future.lat.values == result["lat"])[0][0]
+    #     lon_idx = np.where(gcm_future.lon.values == result["lon"])[0][0]
+    #     for i, var in enumerate(var_list_w):
+    #         corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+
     for result in results:
-        lat_idx = np.where(gcm_future.lat.values == result["lat"])[0][0]
-        lon_idx = np.where(gcm_future.lon.values == result["lon"])[0][0]
-        for i, var in enumerate(var_list_w):
-            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+        li = _grid_index(lat_values, result["lat"])
+        lj = _grid_index(lon_values, result["lon"])
+        for i, var in enumerate(variable):
+            corrected_data[var][:, :, :, li, lj] = result["gcmc_corrected"][i]
 
     # Convert to Xarray Dataset
     gcmc_corrected = xr.Dataset(
         {
             var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
-            for var in var_list_w
+            for var in variable
         },
         coords={
             "year": gcm_future.year,
@@ -864,7 +933,13 @@ def bc_correction_grid_cell_future_dask(
     # # Compute all delayed tasks in parallel
     # final_corrected_data = dask.compute(bc_corrected_6hourly_data)
 
-    return gcmc_corrected
+    if len(variable) == 1:
+        daily_data_aligned = align_daily_data_xr(
+            config, gcmc_corrected, config.startyear_f
+        )
+        return daily_data_aligned
+    else:
+        return gcmc_corrected
 
 
 def preprocess_and_save_gcm(
@@ -939,7 +1014,13 @@ def preprocess_and_save_gcm(
             sliced_gcm[var_name] = data_var
 
         sliced_gcm_sel = sliced_gcm.astype(np.float32).persist()
-        sliced_gcm_sel.to_netcdf(temp_file)
+        lock = Lock(name=temp_file)  # one-writer-per-path
+        with lock:
+            # Double-check if the file was created while waiting for the lock
+            if not os.path.exists(temp_file):
+                _atomic_to_netcdf(sliced_gcm_sel, temp_file)
+        # Ensure the dataset is closed after writing
+        sliced_gcm_sel.close()
     else:
         print(f"File {temp_file} already exists. Skipping.")
 
@@ -1017,7 +1098,14 @@ def preprocess_and_save_obs(
             )
         )
         obs_ds_sel = obs_ds_sel.astype("float32").persist()
-        obs_ds_sel.to_netcdf(temp_file)
+        # Use a lock to ensure only one process writes to the file at a time
+        lock = Lock(name=temp_file)  # one-writer-per-path
+        with lock:
+            # Double-check if the file was created while waiting for the lock
+            if not os.path.exists(temp_file):
+                _atomic_to_netcdf(obs_ds_sel, temp_file)
+        # Ensure the dataset is closed after writing
+        obs_ds_sel.close()
     else:
         print(f"File {temp_file} already exists. Skipping.")
 
@@ -1167,7 +1255,7 @@ def bc_correction_grid_cell_multiprocess(config, gcm, obs, variable):
 
     # Use multiprocessing Pool
     num_workers = cpu_count()  # Get number of CPU cores
-    n = num_workers
+    n = int(num_workers / 2)
     # n = min(len(os.sched_getaffinity(0)), num_workers, 96)
     print(f"Using {n} CPU cores for parallel processing...")
 
@@ -1195,7 +1283,7 @@ def bc_correction_grid_cell_multiprocess(config, gcm, obs, variable):
         for i, var in enumerate(variable):
             corrected_data[var][:, :, :, li, lj] = result["gcmc_corrected"][i]
         bc_params_array[li, lj] = result["bc_params"].to_dict()
-        
+
     # Convert to xarray Dataset
     gcmc_corrected = xr.Dataset(
         {
@@ -1243,65 +1331,65 @@ def bc_correction_grid_cell_hist_dask(
     - ds_corrected: Xarray Dataset with corrected data and bias correction parameters
     """
 
-    # # # Generate tasks for each grid cell
+    # # Generate tasks for each grid cell
+    tasks = [
+        dask.delayed(process_grid_cell)(config, lat, lon, reshaped_gcm, reshaped_obs)
+        for lat, lon in itertools.product(
+            reshaped_gcm.lat.values, reshaped_gcm.lon.values
+        )
+    ]
+
+    # grid_cells = list(
+    #     itertools.product(reshaped_gcm.lat.values, reshaped_gcm.lon.values)
+    # )
+    # batch_size = 1  # Process 20 grid cells at a time
     # tasks = [
-    #     dask.delayed(process_grid_cell)(lat, lon, reshaped_gcm, reshaped_obs)
-    #     for lat, lon in itertools.product(
-    #         reshaped_gcm.lat.values, reshaped_gcm.lon.values
+    #     dask.delayed(process_batch_of_grid_cells)(
+    #         grid_cells[i : i + batch_size], reshaped_gcm, reshaped_obs
     #     )
+    #     for i in range(0, len(grid_cells), batch_size)
     # ]
 
-    # # grid_cells = list(
-    # #     itertools.product(reshaped_gcm.lat.values, reshaped_gcm.lon.values)
-    # # )
-    # # batch_size = 1  # Process 20 grid cells at a time
-    # # tasks = [
-    # #     dask.delayed(process_batch_of_grid_cells)(
-    # #         grid_cells[i : i + batch_size], reshaped_gcm, reshaped_obs
-    # #     )
-    # #     for i in range(0, len(grid_cells), batch_size)
-    # # ]
+    # Compute all tasks in parallel at the end
+    results = dask.compute(*tasks)
 
-    # # Compute all tasks in parallel at the end
-    # results = dask.compute(*tasks)
+    # Flatten the list of results
+    flattened_results = [item for sublist in results for item in sublist]
 
-    # # Flatten the list of results
-    # flattened_results = [item for sublist in results for item in sublist]
-
-    # # Initialize arrays to hold the final data
-    # corrected_data = {
-    #     var: np.empty((31, 12, 31, len(reshaped_gcm.lat), len(reshaped_gcm.lon)))
-    #     for var in var_list_w
-    # }
-    # bc_params_array = np.empty(
-    #     (len(reshaped_gcm.lat), len(reshaped_gcm.lon)), dtype=object
-    # )
-
-    # # Fill the arrays with data from results
-    # for result in results:
-    #     lat_idx = np.where(reshaped_gcm.lat.values == result["lat"])[0][0]
-    #     lon_idx = np.where(reshaped_gcm.lon.values == result["lon"])[0][0]
-    #     for i, var in enumerate(var_list_w):
-    #         corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
-    #     bc_params_array[lat_idx, lon_idx] = result["bc_params"].to_dict()
-
-    # # Convert to Xarray Dataset
-    # gcmc_corrected = xr.Dataset(
-    #     {
-    #         var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
-    #         for var in var_list_w
-    #     },
-    #     coords={
-    #         "year": reshaped_gcm.year,
-    #         "month": reshaped_gcm.month,
-    #         "day": reshaped_gcm.day,
-    #         "lat": reshaped_gcm.lat,
-    #         "lon": reshaped_gcm.lon,
-    #     },
-    # )
-    gcmc_corrected, bc_params_array = bc_correction_grid_cell_multiprocess(
-        config, reshaped_gcm, reshaped_obs, var_list_w
+    # Initialize arrays to hold the final data
+    corrected_data = {
+        var: np.empty((31, 12, 31, len(reshaped_gcm.lat), len(reshaped_gcm.lon)))
+        for var in var_list_w
+    }
+    bc_params_array = np.empty(
+        (len(reshaped_gcm.lat), len(reshaped_gcm.lon)), dtype=object
     )
+
+    # Fill the arrays with data from results
+    for result in results:
+        lat_idx = np.where(reshaped_gcm.lat.values == result["lat"])[0][0]
+        lon_idx = np.where(reshaped_gcm.lon.values == result["lon"])[0][0]
+        for i, var in enumerate(var_list_w):
+            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
+        bc_params_array[lat_idx, lon_idx] = result["bc_params"].to_dict()
+
+    # Convert to Xarray Dataset
+    gcmc_corrected = xr.Dataset(
+        {
+            var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
+            for var in var_list_w
+        },
+        coords={
+            "year": reshaped_gcm.year,
+            "month": reshaped_gcm.month,
+            "day": reshaped_gcm.day,
+            "lat": reshaped_gcm.lat,
+            "lon": reshaped_gcm.lon,
+        },
+    )
+    # gcmc_corrected, bc_params_array = bc_correction_grid_cell_multiprocess(
+    #     config, reshaped_gcm, reshaped_obs, var_list_w
+    # )
     six_hourly_data_hist = rescale_and_reformat(config, gcmc_corrected, ff_gcm, ff_obs)
 
     bc_corrected_6hourly_data = apply_boundary_correction(
@@ -1347,7 +1435,15 @@ def bc_correction_grid_cell_hist_dask_2d(
 
     # Initialize arrays to hold the final data
     corrected_data = {
-        var: np.empty((len(reshaped_gcm.year), len(reshaped_gcm.month), len(reshaped_gcm.day), len(reshaped_gcm.lat), len(reshaped_gcm.lon)))
+        var: np.empty(
+            (
+                len(reshaped_gcm.year),
+                len(reshaped_gcm.month),
+                len(reshaped_gcm.day),
+                len(reshaped_gcm.lat),
+                len(reshaped_gcm.lon),
+            )
+        )
         for var in var_list_w
     }
     bc_params_array = np.empty(
@@ -1551,7 +1647,7 @@ def bc_correction_grid_cell_future_multiprocess(
 
     # Use multiprocessing Pool
     num_workers = cpu_count()  # Get number of CPU cores
-    n = num_workers
+    n = int(num_workers / 2)
     # n = min(len(os.sched_getaffinity(0)), num_workers, 96)
     print(f"Using {n} CPU cores for parallel processing...")
 
@@ -1560,7 +1656,15 @@ def bc_correction_grid_cell_future_multiprocess(
 
     # Convert results back to xarray.Dataset
     corrected_data = {
-        var: np.empty((len(gcm_future.year), len(gcm_future.month), len(gcm_future.day), len(lat_values), len(lon_values)))
+        var: np.empty(
+            (
+                len(gcm_future.year),
+                len(gcm_future.month),
+                len(gcm_future.day),
+                len(lat_values),
+                len(lon_values),
+            )
+        )
         for var in variable
     }
 
@@ -1713,7 +1817,15 @@ def bc_correction_grid_cell_future_dask_2d(
     print("tasks done")
     # Initialize arrays to hold the final data
     corrected_data = {
-        var: np.empty((len(gcm_future.year), len(gcm_future.month), len(gcm_future.day), len(gcm_future.lat), len(gcm_future.lon)))
+        var: np.empty(
+            (
+                len(gcm_future.year),
+                len(gcm_future.month),
+                len(gcm_future.day),
+                len(gcm_future.lat),
+                len(gcm_future.lon),
+            )
+        )
         for var in variable
     }
 
@@ -1921,11 +2033,77 @@ def adjust_dates_to_target_year(config, corrected_data, target_year):
 #     return corrected_dataset
 
 
+# def convert_bc_params_to_xarray(config, bc_params_array, lat_values, lon_values):
+#     nlat, nlon = bc_params_array.shape
+
+#     # --- Extract Variable Keys and Pre-allocate Arrays ---
+#     # Find the variable keys from the first non-None dictionary in bc_params_array.
+#     var_keys = None
+#     for i in range(nlat):
+#         for j in range(nlon):
+#             if bc_params_array[i, j] is not None:
+#                 var_keys = list(bc_params_array[i, j].keys())
+#                 break
+#         if var_keys is not None:
+#             break
+
+#     if var_keys is None:
+#         raise ValueError("No valid dictionary found in bc_params_array.")
+
+#     # For each key, determine the flattened size from the first sample,
+#     # converting scalars to numpy arrays so that they have a shape.
+#     data_vars = {}
+#     original_shapes = {}  # to store each variable's original shape for later reshaping
+#     for key in var_keys:
+#         sample_val = bc_params_array[i, j][key]
+#         # Convert scalars (or objects without shape) to numpy arrays.
+#         if np.isscalar(sample_val) or not hasattr(sample_val, "shape"):
+#             sample_array = np.array([sample_val])
+#         else:
+#             sample_array = sample_val
+#         original_shapes[key] = sample_array.shape
+#         flat_len = sample_array.size
+#         data_vars[key] = np.empty((flat_len, nlat, nlon), dtype=sample_array.dtype)
+#         # print(f"{key}: original shape = {sample_array.shape}, flat length = {flat_len}")
+
+#     # --- Fill the Data Arrays ---
+#     # Loop through each grid cell, flatten the array from each dictionary, and store it.
+#     for i in range(nlat):
+#         for j in range(nlon):
+#             cell_dict = bc_params_array[i, j]
+#             if cell_dict is not None:
+#                 for key in var_keys:
+#                     val = cell_dict[key]
+#                     if np.isscalar(val) or not hasattr(val, "shape"):
+#                         arr = np.array([val])
+#                     else:
+#                         arr = val
+#                     data_vars[key][:, i, j] = arr.flatten()
+#             else:
+#                 for key in var_keys:
+#                     data_vars[key][:, i, j] = np.nan
+
+#     # --- Create xarray Dataset ---
+#     # Build an xarray Dataset with coordinates for lat and lon.
+#     ds = xr.Dataset(
+#         coords={"lat": (("lat",), lat_values), "lon": (("lon",), lon_values)}
+#     )
+
+#     # Add each variable to the Dataset with a unique flattened dimension for each variable.
+#     for key, arr in data_vars.items():
+#         flat_dim_name = f"{key}_flat"
+#         ds[key] = ((flat_dim_name, "lat", "lon"), arr)
+#         ds[key].attrs["original_shape"] = original_shapes[key]
+
+#     # (Optional) Save the Dataset to a NetCDF file instead of npy for more efficient I/O.
+#     # ds.to_netcdf("bc_params.nc")
+#     return ds
+
+
 def convert_bc_params_to_xarray(config, bc_params_array, lat_values, lon_values):
     nlat, nlon = bc_params_array.shape
 
-    # --- Extract Variable Keys and Pre-allocate Arrays ---
-    # Find the variable keys from the first non-None dictionary in bc_params_array.
+    # ---- discover keys from first non-None cell ----
     var_keys = None
     for i in range(nlat):
         for j in range(nlon):
@@ -1934,55 +2112,71 @@ def convert_bc_params_to_xarray(config, bc_params_array, lat_values, lon_values)
                 break
         if var_keys is not None:
             break
-
     if var_keys is None:
         raise ValueError("No valid dictionary found in bc_params_array.")
 
-    # For each key, determine the flattened size from the first sample,
-    # converting scalars to numpy arrays so that they have a shape.
-    data_vars = {}
-    original_shapes = {}  # to store each variable's original shape for later reshaping
-    for key in var_keys:
-        sample_val = bc_params_array[i, j][key]
-        # Convert scalars (or objects without shape) to numpy arrays.
-        if np.isscalar(sample_val) or not hasattr(sample_val, "shape"):
-            sample_array = np.array([sample_val])
-        else:
-            sample_array = sample_val
-        original_shapes[key] = sample_array.shape
-        flat_len = sample_array.size
-        data_vars[key] = np.empty((flat_len, nlat, nlon), dtype=sample_array.dtype)
-        # print(f"{key}: original shape = {sample_array.shape}, flat length = {flat_len}")
+    def to_array(v):
+        if np.isscalar(v) or not hasattr(v, "shape"):
+            return np.array([v])
+        return np.asarray(v)
 
-    # --- Fill the Data Arrays ---
-    # Loop through each grid cell, flatten the array from each dictionary, and store it.
+    # ---- scan all cells to find the MAX (global) shape per key ----
+    # We pick, for each key, the shape with the largest total size seen across the grid.
+    ref_shape_by_key = {}
+    max_flat_len = {}
+
+    for k in var_keys:
+        ref_shape_by_key[k] = None
+        max_flat_len[k] = 0
+
     for i in range(nlat):
         for j in range(nlon):
-            cell_dict = bc_params_array[i, j]
-            if cell_dict is not None:
-                for key in var_keys:
-                    val = cell_dict[key]
-                    if np.isscalar(val) or not hasattr(val, "shape"):
-                        arr = np.array([val])
-                    else:
-                        arr = val
-                    data_vars[key][:, i, j] = arr.flatten()
-            else:
-                for key in var_keys:
-                    data_vars[key][:, i, j] = np.nan
+            d = bc_params_array[i, j]
+            if d is None:
+                continue
+            for k in var_keys:
+                a = to_array(d[k])
+                size = a.size
+                # update to the largest shape encountered
+                if size > max_flat_len[k]:
+                    max_flat_len[k] = size
+                    ref_shape_by_key[k] = tuple(a.shape)
 
-    # --- Create xarray Dataset ---
-    # Build an xarray Dataset with coordinates for lat and lon.
-    ds = xr.Dataset(
-        coords={"lat": (("lat",), lat_values), "lon": (("lon",), lon_values)}
-    )
+    # safety: ensure we found at least one shape per key
+    missing = [k for k, shp in ref_shape_by_key.items() if shp is None]
+    if missing:
+        raise ValueError(f"No sample shape found for keys: {missing}")
 
-    # Add each variable to the Dataset with a unique flattened dimension for each variable.
-    for key, arr in data_vars.items():
-        flat_dim_name = f"{key}_flat"
-        ds[key] = ((flat_dim_name, "lat", "lon"), arr)
-        ds[key].attrs["original_shape"] = original_shapes[key]
+    # ---- allocate flat arrays sized to the MAX flat length per key ----
+    data_vars = {}
+    for k in var_keys:
+        L = max_flat_len[k]
+        # use float to allow NaN padding (xarray will write doubles by default)
+        data_vars[k] = np.full((L, nlat, nlon), np.nan, dtype=float)
 
-    # (Optional) Save the Dataset to a NetCDF file instead of npy for more efficient I/O.
-    # ds.to_netcdf("bc_params.nc")
+    # ---- fill (pad with NaN up to the MAX length) ----
+    for i in range(nlat):
+        for j in range(nlon):
+            d = bc_params_array[i, j]
+            if d is None:
+                continue
+            for k in var_keys:
+                flat = to_array(d[k]).astype(float, copy=False).ravel()
+                L = flat.size
+                data_vars[k][:L, i, j] = flat  # remainder stays NaN
+
+    # ---- build Dataset with one flat dim per variable, as in your level-0 file ----
+    ds = xr.Dataset(coords={"lat": ("lat", np.asarray(lat_values, dtype=float)),
+                            "lon": ("lon", np.asarray(lon_values, dtype=float))})
+
+    for k, arr in data_vars.items():
+        flat_dim = f"{k}_flat"
+        # dimension naming + attach variable with (flat, lat, lon)
+        ds[k] = ((flat_dim, "lat", "lon"), arr)
+
+        # store the EXACT "original_shape" attribute as an INT array
+        # so it appears as "3LL, 12LL, ..." in ncdump and is easily reshape-able
+        ds[k].attrs["original_shape"] = np.asarray(ref_shape_by_key[k], dtype=np.int64)
+
     return ds
+

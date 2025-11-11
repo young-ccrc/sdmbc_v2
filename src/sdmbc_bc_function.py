@@ -996,23 +996,23 @@ def bc_correction_hist(config, gcm_reshape, obs_reshape):
     # day
     avdc_iter = np.zeros((nntr, nvar, 12, 31))
     sddc_iter = np.zeros((nntr, nvar, 12, 31))
-    cmod_iter = np.zeros((nntr, 12, 31, nvar, nvar))
-    gmod_iter = np.zeros((nntr, 12, 31, nvar, nvar))
+    cmod_iter = np.zeros((nntr, 12, 31, newvar, newvar))
+    gmod_iter = np.zeros((nntr, 12, 31, newvar, newvar))
     # month
     avmc_iter = np.zeros((nntr, nvar, 12))
     sdmc_iter = np.zeros((nntr, nvar, 12))
-    cmodm_iter = np.zeros((nntr, 12, nvar, nvar))
-    gmodm_iter = np.zeros((nntr, 12, nvar, nvar))
+    cmodm_iter = np.zeros((nntr, 12, newvar, newvar))
+    gmodm_iter = np.zeros((nntr, 12, newvar, newvar))
     # season
     avsc_iter = np.zeros((nntr, nvar, nss))
     sdsc_iter = np.zeros((nntr, nvar, nss))
-    cmods_iter = np.zeros((nntr, nss, nvar, nvar))
-    gmods_iter = np.zeros((nntr, nss, nvar, nvar))
+    cmods_iter = np.zeros((nntr, nss, newvar, newvar))
+    gmods_iter = np.zeros((nntr, nss, newvar, newvar))
     # year
     avyc_iter = np.zeros((nntr, nvar))
     sdyc_iter = np.zeros((nntr, nvar))
-    cmody_iter = np.zeros((nntr, nvar, nvar))
-    gmody_iter = np.zeros((nntr, nvar, nvar))
+    cmody_iter = np.zeros((nntr, newvar, newvar))
+    gmody_iter = np.zeros((nntr, newvar, newvar))
 
     # Initialize input arrays
     gcmc = gcm_reshape.copy()

@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import shutil
 import time  # Import the time module
 import warnings
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from bc_grid_function import (
     preprocess_and_save_obs,
     process_tile,
     process_tile_future,
+    _atomic_to_netcdf,
 )
 
 # from data_preparation import   # type: ignore
@@ -49,11 +51,35 @@ warnings.simplefilter("ignore", UserWarning)
 
 
 # Start of the script -----------------------------------------------------
+# def setup_client(ncpus, mem_gb):
+#     """
+#     Dynamically set up a Dask client based on available CPUs and memory.
+#     """
+#     threads_per_worker = min(ncpus, 8)
+#     n_workers = max(1, ncpus // threads_per_worker)
+#     mem_per_worker = int(mem_gb / n_workers)
+
+#     print(
+#         f"[INFO] Starting Dask client: {n_workers} workers × {threads_per_worker} threads"
+#     )
+#     print(f"[INFO] Each worker memory limit: {mem_per_worker}GB")
+
+#     return Client(
+#         n_workers=n_workers,
+#         threads_per_worker=threads_per_worker,
+#         memory_limit=f"{mem_per_worker}GB",
+#     )
+
+
 def setup_client(ncpus, mem_gb):
     """
     Dynamically set up a Dask client based on available CPUs and memory.
+    Prefer 1 thread per worker for HDF5/NetCDF workloads.
     """
-    threads_per_worker = min(ncpus, 8)
+    # Respect scheduler if not overridden
+    ncpus = ncpus or int(os.environ.get("PBS_NCPUS", os.cpu_count() or 1))
+
+    threads_per_worker = 1
     n_workers = max(1, ncpus // threads_per_worker)
     mem_per_worker = int(mem_gb / n_workers)
 
@@ -65,6 +91,7 @@ def setup_client(ncpus, mem_gb):
     return Client(
         n_workers=n_workers,
         threads_per_worker=threads_per_worker,
+        processes=True,
         memory_limit=f"{mem_per_worker}GB",
     )
 
@@ -160,6 +187,11 @@ def dict_to_simplenamespace(d):
 def main(config_path, override_ncpus=None, override_mem=None):
 
     # setup_client()
+    # Cap math/BLAS threads to avoid oversubscription
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
     # Load YAML config
     with open(config_path, "r") as f:
@@ -405,8 +437,12 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
                 output_params = f"{temp_dir}/bc_params_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
 
-                obs_tile = sliced_obs.isel(lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1))
-                gcm_tile = sliced_gcm.isel(lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1))
+                obs_tile = sliced_obs.isel(
+                    lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
+                )
+                gcm_tile = sliced_gcm.isel(
+                    lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
+                )
                 # # Check if both output files already exist
                 # if os.path.exists(output_file) and os.path.exists(output_params):
                 #     print(
@@ -424,11 +460,21 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 )
 
                 # Save the bias-corrected output
+                # if not os.path.exists(output_file):
+                #     print(
+                #         f"Saving 3D output for tile {idx}, level {level} to {output_file}"
+                #     )
+                #     bc_corrected_gcm_hist_tile.compute().to_netcdf(output_file)
+                # else:
+                #     print(f"File {output_file} already exists. Skipping...")
                 if not os.path.exists(output_file):
                     print(
                         f"Saving 3D output for tile {idx}, level {level} to {output_file}"
                     )
-                    bc_corrected_gcm_hist_tile.compute().to_netcdf(output_file)
+                    ds_tile = (
+                        bc_corrected_gcm_hist_tile.compute()
+                    )  # materialize to numpy
+                    _atomic_to_netcdf(ds_tile, output_file)
                 else:
                     print(f"File {output_file} already exists. Skipping...")
 
@@ -436,7 +482,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 # Assume each tile hn be extracted from obs_tile or gcm_tile.
                 tile_lat = obs_tile["lat"].values
                 tile_lon = obs_tile["lon"].values
-                
+
                 # (Optional safety check)
                 if (
                     tile_lat.shape[0] != bc_params_tile.shape[0]
@@ -447,7 +493,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
                         f"lat coords {tile_lat.shape[0]} vs params {bc_params_tile.shape[0]}, "
                         f"lon coords {tile_lon.shape[0]} vs params {bc_params_tile.shape[1]}"
                     )
-                    
+
                 ds_params = convert_bc_params_to_xarray(
                     config, bc_params_tile, tile_lat, tile_lon
                 )
@@ -463,11 +509,18 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 # else:
                 #     print(f"File {output_params} already exists. Skipping...")
                 #     # continue
+                # if not os.path.exists(output_params):
+                #     print(
+                #         f"Saving 3D params for tile {idx}, level {level} to {output_params}"
+                #     )
+                #     ds_params.to_netcdf(output_params)
+                # else:
+                #     print(f"File {output_params} already exists. Skipping...")
                 if not os.path.exists(output_params):
                     print(
                         f"Saving 3D params for tile {idx}, level {level} to {output_params}"
                     )
-                    ds_params.to_netcdf(output_params)
+                    _atomic_to_netcdf(ds_params.load(), output_params)
                 else:
                     print(f"File {output_params} already exists. Skipping...")
                 # # Accumulate bc_params_tile for later concatenation
@@ -626,7 +679,8 @@ def main(config_path, override_ncpus=None, override_mem=None):
 
             # Save the merged full-domain bias-correction parameters as a single NetCDF file.
             full_params_output = f"{out_path}/bc_params_3d_{period}_lev_{level}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.nc"
-            ds_full_params.to_netcdf(full_params_output)
+            # ds_full_params.to_netcdf(full_params_output)
+            _atomic_to_netcdf(ds_full_params.load(), full_params_output)
             print("Saved full domain bc_params to", full_params_output)
 
             if config.save_bc_output:
@@ -654,7 +708,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
                     )
                 # Define output file paths
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_{period_f}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
-                
+
                 lat_i0, lat_i1 = tile["lat_min_idx"], tile["lat_max_idx"]
                 lon_j0, lon_j1 = tile["lon_min_idx"], tile["lon_max_idx"]
 
@@ -682,11 +736,18 @@ def main(config_path, override_ncpus=None, override_mem=None):
                     )
 
                 # Save the bias-corrected output
+                # if not os.path.exists(output_file):
+                #     print(
+                #         f"Saving 3D output for tile {idx}, level {level} to {output_file}"
+                #     )
+                #     bc_corrected_gcm_future_tile.compute().to_netcdf(output_file)
+                #     del bc_corrected_gcm_future_tile
                 if not os.path.exists(output_file):
                     print(
                         f"Saving 3D output for tile {idx}, level {level} to {output_file}"
                     )
-                    bc_corrected_gcm_future_tile.compute().to_netcdf(output_file)
+                    ds_tile_f = bc_corrected_gcm_future_tile.compute()
+                    _atomic_to_netcdf(ds_tile_f, output_file)
                     del bc_corrected_gcm_future_tile
                 # else:
                 #     print(f"File {output_file} already exists. Skipping...")
@@ -791,12 +852,16 @@ def main(config_path, override_ncpus=None, override_mem=None):
             print("save the bc model")
             full_bc_corrected = full_bc_corrected.astype("float32")  # save as float32
 
+            # if config.save_bc_output:
+            #     # save the bias corrected data # from input gcm or obs to target gcm
+            #     full_bc_corrected.load().to_netcdf(
+            #         f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_f}_{endyear_f}.nc"
+            #     )
             if config.save_bc_output:
-                # save the bias corrected data # from input gcm or obs to target gcm
-                full_bc_corrected.load().to_netcdf(
-                    f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_f}_{endyear_f}.nc"
+                _atomic_to_netcdf(
+                    full_bc_corrected.load(),
+                    f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_f}_{endyear_f}.nc",
                 )
-
         # Remove the temporary directory and its contents
         shutil.rmtree(temp_dir)
         print("Intermediate files deleted.")
@@ -807,7 +872,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
             end_time - start_time
         ) / 60  # Convert seconds to minutes
         print(f"Completed processing in {elapsed_time_minutes:.2f} minutes")
-        
+
 
 if __name__ == "__main__":
     # args = parse_arguments()
