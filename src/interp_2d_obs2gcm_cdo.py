@@ -42,16 +42,20 @@ def load_config(yaml_path):
     """
     Load configuration from a YAML file.
 
-    Args:
-        yaml_path (str): Path to the YAML configuration file.
-
-    Returns:
-        Config: Configuration object with loaded settings.
+    Supports both the legacy flat schema and the grouped schema used by the
+    interpolation workflow.
     """
     with open(yaml_path, "r") as file:
-        config_data = yaml.safe_load(file)
-    # return Config(**config_data)
-    return config_data
+        config_data = yaml.safe_load(file) or {}
+
+    grouped_sections = ("paths", "source", "target", "domain", "period", "resources", "future")
+    merged_config = dict(config_data)
+    for section in grouped_sections:
+        section_data = config_data.get(section)
+        if isinstance(section_data, dict):
+            merged_config.update(section_data)
+
+    return merged_config
 
 
 def parse_arguments():
@@ -61,7 +65,7 @@ def parse_arguments():
     Returns:
         argparse.Namespace: Parsed arguments.
     """
-    parser = argparse.ArgumentParser(description="Run atmospheric data interpolation.")
+    parser = argparse.ArgumentParser(description="Run surface interpolation.")
     parser.add_argument(
         "--yp",
         type=str,
@@ -71,8 +75,8 @@ def parse_arguments():
     parser.add_argument(
         "--var",
         type=str,
-        default=["hus", "ta", "ua", "va"],
-        help="Path to the YAML configuration file.",
+        required=True,
+        help="Surface variable to interpolate, for example tos.",
     )
     return parser.parse_args()
 
@@ -157,8 +161,10 @@ def is_within_period(file_start, file_end, target_start, target_end):
 
 
 # End of the functions -------------------------------------------------------
-def main(config):
+def main(config_path, var_interp):
 
+    config = load_config(config_path)
+    config["var_interp"] = var_interp
     client = setup_client()
 
     # Define start and end years
@@ -311,7 +317,5 @@ print("Interpolation complete.")
 
 if __name__ == "__main__":
     args = parse_arguments()
-    config = load_config(args.yp)
-    config["var_interp"] = args.var
-    main(config)
+    main(args.yp, args.var)
     print("All done!")

@@ -1,25 +1,20 @@
 schema_version: 2
 workflow: interp_3d
-experiment: era5_to_access_esm1_5_historical
+experiment: cnrm_cm6_1_to_access_esm1_5_historical
 
 paths:
-  input_path: "/g/data/rt52/era5/pressure-levels/reanalysis"
-  input_path_sst: "/g/data/rt52/era5/single-levels/reanalysis"
-  input_z_path: "/g/data/rt52/era5/pressure-levels/reanalysis/z"
-  output_path: "/g/data/w28/yk8692/input/era5/access_esm"
+  input_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2"
+  output_path: "/g/data/w28/yk8692/input/model_as_truth/cnrm_to_access/3d"
 
 source:
-  input_model: "reanalysis"
-
-# Set the input_* fields below only for model-as-truth runs.
-# Example:
-# input_model: "gcm"
-# input_infor: "6hrLev"
-# input_gname: "CNRM-CM6-1"
-# input_period: "historical"
-# input_cinfor: "r1i1p1f2"
-# input_sinfor: "gr"
-# input_version: "v20180917"
+  input_model: "gcm"
+  input_infor: "6hrLev"
+  input_gname: "CNRM-CM6-1"
+  input_period: "historical"
+  input_cinfor: "r1i1p1f2"
+  input_sinfor: "gr"
+  input_version: "v20180917"
+  input_z_path: null
 
 target:
   target_model: "gcm"
