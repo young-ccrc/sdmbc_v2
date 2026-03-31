@@ -16,10 +16,10 @@ Create one YAML per experiment and keep the filename descriptive.
 
 Examples:
 
-- `config_interp_3d.yaml`: ERA5 to ACCESS-ESM1-5 historical
-- `config_interp_3d_future.yaml`: ERA5 to ACCESS-ESM1-5 future
-- `config_interp_3d_cnrm_to_access.yaml`: CNRM-CM6-1 to ACCESS-ESM1-5 historical
-- `config_interp_surface_cnrm_to_access.yaml`: CNRM-CM6-1 to ACCESS-ESM1-5 surface historical
+- `config_interp_3d_era5_to_access_hist.yaml`: ERA5 to ACCESS-ESM1-5 historical
+- `config_interp_3d_era5_to_access_ssp370.yaml`: ERA5 to ACCESS-ESM1-5 future
+- `config_interp_3d_cnrm_to_access_hist.yaml`: CNRM-CM6-1 to ACCESS-ESM1-5 historical
+- `config_interp_surface_cnrm_to_access_hist.yaml`: CNRM-CM6-1 to ACCESS-ESM1-5 surface historical
 
 ## YAML structure
 
@@ -69,16 +69,16 @@ Use the wrapper script instead of editing PBS files directly.
 
 ```bash
 cd /g/data/w28/yk8692/sdmbc_v2/src
-./submit_interp.sh 3d config_interp_3d.yaml ta
-./submit_interp.sh 3d config_interp_3d_cnrm_to_access.yaml ta
+./submit_interp.sh 3d config_interp_3d_era5_to_access_hist.yaml ta
+./submit_interp.sh 3d config_interp_3d_cnrm_to_access_hist.yaml ta
 ```
 
 ### Surface
 
 ```bash
 cd /g/data/w28/yk8692/sdmbc_v2/src
-./submit_interp.sh surface config_interp_surface.yaml tos
-./submit_interp.sh surface config_interp_surface_cnrm_to_access.yaml tos
+./submit_interp.sh surface config_interp_surface_era5_to_access_hist.yaml tos
+./submit_interp.sh surface config_interp_surface_cnrm_to_access_hist.yaml tos
 ```
 
 ## Comments in YAML vs documentation
@@ -104,3 +104,7 @@ Examples:
 - `config_interp_surface_cnrm_to_access_hist.yaml`
 
 That keeps the workflow explicit and reduces mistakes.
+
+## Legacy filenames
+
+The older config filenames are still kept in the repository for compatibility, but new work should prefer the descriptive names above.

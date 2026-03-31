@@ -1,0 +1,44 @@
+schema_version: 2
+workflow: interp_3d
+experiment: cnrm_cm6_1_to_access_esm1_5_historical
+
+paths:
+  input_path: "/g/data/oi10/replicas/CMIP6/CMIP/CNRM-CERFACS/CNRM-CM6-1/historical/r1i1p1f2"
+  output_path: "/g/data/w28/yk8692/input/model_as_truth/cnrm_to_access/3d"
+
+source:
+  input_model: "gcm"
+  input_infor: "6hrLev"
+  input_gname: "CNRM-CM6-1"
+  input_period: "historical"
+  input_cinfor: "r1i1p1f2"
+  input_sinfor: "gr"
+  input_version: "v20180917"
+  input_z_path: null
+
+target:
+  target_model: "gcm"
+  target_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1"
+  target_path_sst: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1"
+  target_g_path: null
+  target_orog_path: "/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1"
+  infor: "6hrLev"
+  gname: "ACCESS-ESM1-5"
+  period: "historical"
+  cinfor: "r6i1p1f1"
+  sinfor: "gn"
+  version: "v20200529"
+
+domain:
+  lat_min: 10
+  lat_max: 15
+  lon_min: 110
+  lon_max: 115
+
+period:
+  startyear_h: 1959
+  endyear_h: 2014
+
+resources:
+  ncpus: 48
+  mem_gb: 190

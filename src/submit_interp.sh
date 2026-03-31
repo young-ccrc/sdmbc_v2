@@ -19,8 +19,9 @@ Optional environment overrides:
   MODULE_ANALYSIS_OVERRIDE
 
 Examples:
-  ./submit_interp.sh 3d src/config_interp_3d.yaml ta
-  ./submit_interp.sh surface src/config_interp_surface.yaml tos
+  ./submit_interp.sh 3d src/config_interp_3d_era5_to_access_hist.yaml ta
+  ./submit_interp.sh 3d src/config_interp_3d_cnrm_to_access_hist.yaml ta
+  ./submit_interp.sh surface src/config_interp_surface_era5_to_access_hist.yaml tos
 EOF
 }
 
