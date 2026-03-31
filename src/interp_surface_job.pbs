@@ -1,0 +1,27 @@
+#!/bin/bash
+#PBS -m ae
+#PBS -P n81
+#PBS -q normal
+#PBS -j oe
+#PBS -l wd
+#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/hh5+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
+
+set -eu
+
+CONFIG=${CONFIG:?CONFIG is required}
+VAR=${VAR:?VAR is required}
+MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3-24.04}
+SCRIPT_PATH=${SCRIPT_PATH:-interp_2d_obs2gcm_cdo.py}
+
+printf 'Starting time: '
+date
+
+module use /g/data3/hh5/public/modules
+module load "conda/${MODULE_ANALYSIS}"
+
+printf 'Starting surface interpolation for %s using %s
+' "$VAR" "$CONFIG"
+python "$SCRIPT_PATH" --yp "$CONFIG" --var "$VAR"
+
+printf 'Ending time: '
+date
