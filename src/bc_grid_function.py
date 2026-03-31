@@ -23,7 +23,7 @@ import uuid, tempfile
 
 import dask  # type: ignore
 import dask.array as da  # type: ignore
-from dask.distributed import Lock
+from dask.distributed import Lock  # type: ignore
 
 import numpy as np  # type: ignore
 import pandas as pd  # type: ignore

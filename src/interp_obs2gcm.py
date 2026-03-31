@@ -116,6 +116,27 @@ def parse_arguments():
     return parser.parse_args()
 
 
+def normalize_target_variables(selected_variables):
+    """
+    Normalize a target-variable selection to a non-empty list of variable names.
+
+    Parameters:
+        selected_variables (str | list[str] | tuple[str, ...]): Variable selection.
+
+    Returns:
+        list[str]: Normalized variable names.
+    """
+    if isinstance(selected_variables, str):
+        selected_variables = [selected_variables]
+    else:
+        selected_variables = list(selected_variables)
+
+    if not selected_variables:
+        raise ValueError("At least one target variable must be provided.")
+
+    return selected_variables
+
+
 # Start of the script -----------------------------------------------------
 def standardize_dims(ds):
     """
@@ -1106,8 +1127,7 @@ def process_year_month(config, year, month, selected_variables):
     Raises:
     ValueError: If no data is available for the specified year, month, and variable.
     """
-    # selected_variables = [config["var_interp"]]
-    # selected_variables = [selected_variables]
+    selected_variables = normalize_target_variables(selected_variables)
     print("selected_variables", selected_variables)
     tq_variables = ["ta", "hus"]
 
@@ -1701,9 +1721,14 @@ def main(config_path, var_interp, override_ncpus=None, override_mem=None):
     Returns:
         None
     """
-    # Load YAML config
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path)
+    target_names = normalize_target_variables(var_interp)
+    if len(target_names) != 1:
+        raise ValueError(
+            "This script currently processes one target variable per invocation."
+        )
+
+    target_var = target_names[0]
 
     # Extract resources from config
     ncpus = config.get("resources", {}).get("ncpus", 4)
@@ -1726,81 +1751,55 @@ def main(config_path, var_interp, override_ncpus=None, override_mem=None):
 
     # Start Dask client
     client = setup_client(ncpus, mem_gb)
+    try:
+        print("[INFO] Starting interpolation for variable:", target_var)
+        print(f"[INFO] CMIP6 root: {config['target_path']} (table={config['gname']})")
 
-    print("[INFO] Starting interpolation for variable:", var_interp)
-    print(f"[INFO] CMIP6 root: {config['target_path']} (table={config['gname']})")
-    # target_model = config.target_model
-    # Define variables to interpolate
-    # var_interp = variable if isinstance(variable, list) else [variable]
-    # var_interp = variable
+        if target_var not in ["ua", "va", "ta", "hus"]:
+            raise ValueError(
+                f"Unsupported target variable '{target_var}'. "
+                "Expected one of: ua, va, ta, hus."
+            )
 
-    # Define start and end years
-    start_year = config["startyear_h"]
-    end_year = config["endyear_h"]
+        # Define start and end years
+        start_year = config["startyear_h"]
+        end_year = config["endyear_h"]
 
-    # Create output directory if it doesn't exist
-    os.makedirs(config["output_path"], exist_ok=True)
+        # Create output directory if it doesn't exist
+        os.makedirs(config["output_path"], exist_ok=True)
 
-    if var_interp in ["ua", "va", "ta", "hus"]:
         for year in range(start_year, end_year + 1):
             for month in range(1, 13):
-                # Check if the output file already exists
-                output_file = f"{config['output_path']}/{var_interp}_{config['input_model'] if config['input_model'] == 'reanalysis' else config['input_gname']}_to_{config['gname']}_{year}-{month:02}.nc"
+                output_file = f"{config['output_path']}/{target_var}_{config['input_model'] if config['input_model'] == 'reanalysis' else config['input_gname']}_to_{config['gname']}_{year}-{month:02}.nc"
                 if os.path.exists(output_file):
                     print(
                         f"[INFO] Output file already exists: {output_file}. Skipping..."
                     )
                     continue
-                target_names = (
-                    args.var if isinstance(args.var, list) else [args.var]
-                )  # keep as list of target names
-                result = process_year_month(config, year, month, target_names)
-                # target_zfull, target_grids, tq_grids = process_year_month(
-                #     config, year, month, var_interp
-                # )
 
-                # var_interp = "ua"
-                # print('press_year_month_output_target_zfull', target_zfull)
+                result = process_year_month(config, year, month, target_names)
                 if config["input_model"] == "reanalysis":
-                    var_obs = map_obs_name(var_interp)
+                    var_obs = map_obs_name(target_var)
                 else:
-                    var_obs = var_interp
+                    var_obs = target_var
 
                 process_input_variable(
                     config,
                     var_obs,
-                    var_interp,
+                    target_var,
                     year,
                     month,
                     result[1] if result else None,
                     result[0] if result else None,
                     result[2] if result else None,
                 )
-
-    del client
-    gc.collect()
+    finally:
+        client.close()
+        gc.collect()
 
 
 if __name__ == "__main__":
-    # args = parse_arguments()
-    # config = load_config(args.yp)
-    # config["var_interp"] = args.var
-    # # config.startyear_h = args.sy
-    # # config.endyear_h = args.ey
-    # if args.ncpus:
-    #     config["resources"]["ncpus"] = args.ncpus
-    # if args.mem:
-    #     config["resources"]["mem_gb"] = args.mem
-    # main(config)
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--yp", required=True, help="Path to YAML config")
-    parser.add_argument("--var", required=True, help="Variable to process")
-    parser.add_argument(
-        "--ncpus", type=int, default=None, help="Override number of CPUs"
-    )
-    parser.add_argument("--mem", type=int, default=None, help="Override memory in GB")
-
-    args = parser.parse_args()
+    args = parse_arguments()
     main(args.yp, args.var, args.ncpus, args.mem)
 
     print("All done!")
