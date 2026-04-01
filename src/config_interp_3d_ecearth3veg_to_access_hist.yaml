@@ -1,0 +1,37 @@
+domain:
+  lat_max: 90
+  lat_min: -90
+  lon_max: 360
+  lon_min: 0
+experiment: ecearth3veg_to_access_esm1_5_hist
+paths:
+  input_path: /g/data/oi10/replicas/CMIP6/CMIP/EC-Earth-Consortium/EC-Earth3-Veg/historical/r1i1p1f1
+  output_path: /g/data/w28/yk8692/input/model_as_truth/ecearth3veg_to_access/hist/3d
+period:
+  endyear_h: 2014
+  startyear_h: 1984
+resources:
+  mem_gb: 190
+  ncpus: 48
+schema_version: 2
+source:
+  input_cinfor: r1i1p1f1
+  input_gname: EC-Earth3-Veg
+  input_infor: 6hrLev
+  input_model: gcm
+  input_period: historical
+  input_sinfor: gr
+  input_version: v20210601
+  input_z_path: null
+target:
+  cinfor: r6i1p1f1
+  gname: ACCESS-ESM1-5
+  infor: 6hrLev
+  period: historical
+  sinfor: gn
+  target_g_path: null
+  target_orog_path: /g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1
+  target_path: /g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1
+  target_path_sst: /g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1
+  version: v20200529
+workflow: interp_3d

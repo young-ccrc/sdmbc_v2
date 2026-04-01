@@ -1,0 +1,25 @@
+#!/bin/bash
+#PBS -m ae
+#PBS -P n81
+#PBS -q normal
+#PBS -j oe
+#PBS -l wd
+#PBS -l walltime=08:00:00
+#PBS -l mem=32GB
+#PBS -l ncpus=1
+#PBS -l storage=scratch/n81+scratch/w28+gdata/w28
+
+set -eu
+
+PERIOD=${PERIOD:?PERIOD is required, e.g. historical or ssp126}
+REMOTE_USER=${REMOTE_USER:-z5239661}
+REMOTE_HOST=${REMOTE_HOST:-squall.ccrc.unsw.edu.au}
+REMOTE_BASE=${REMOTE_BASE:-/srv/ccrc/NARCliM2/bdy/GCM/UKESM1-0-LL}
+LOCAL_STAGE_ROOT=${LOCAL_STAGE_ROOT:-/g/data/w28/yk8692/input/model_as_truth/ukesm1_0_ll_6hrlev_stage}
+LOCAL_VERSION=${LOCAL_VERSION:-v20260401}
+MEMBER=${MEMBER:-r1i1p1f2}
+GRID_LABEL=${GRID_LABEL:-gn}
+VARS=${VARS:-"hus ta ua va"}
+
+export PERIOD REMOTE_USER REMOTE_HOST REMOTE_BASE LOCAL_STAGE_ROOT LOCAL_VERSION MEMBER GRID_LABEL VARS
+"$(dirname "$0")/stage_ukesm_3d_to_gadi.sh"

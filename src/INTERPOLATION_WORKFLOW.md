@@ -108,3 +108,67 @@ That keeps the workflow explicit and reduces mistakes.
 ## Legacy filenames
 
 The older config filenames are still kept in the repository for compatibility, but new work should prefer the descriptive names above.
+
+## Model-as-truth batch workflow
+
+ACCESS-ESM1-5 is used as the fixed target grid.
+The source models currently configured for production-style use are:
+
+- EC-Earth3-Veg
+- MPI-ESM1-2-HR
+- UKESM1-0-LL surface
+
+Historical batch period:
+
+- 1984 to 2014
+
+Future batch period:
+
+- 2080 to 2100 using `ssp126`
+
+Files added for this workflow:
+
+- `generate_model_as_truth_configs.py`
+- `submit_model_as_truth_hist.sh`
+- `submit_model_as_truth_future.sh`
+- `stage_ukesm_3d_to_gadi.sh`
+- `stage_ukesm_3d_to_gadi.pbs`
+- `submit_stage_ukesm_3d.sh`
+
+Generate or refresh the configs:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+./generate_model_as_truth_configs.py
+```
+
+Submit historical batch jobs:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+./submit_model_as_truth_hist.sh
+```
+
+Submit future batch jobs:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+./submit_model_as_truth_future.sh
+```
+
+Stage UKESM1-0-LL 3D data from Squall to Gadi:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+./submit_stage_ukesm_3d.sh historical
+./submit_stage_ukesm_3d.sh ssp126
+```
+
+The staging workflow copies files from Squall into a local raw directory and then creates a CMIP-like tree on Gadi so the existing interpolation code can use it directly.
+
+Current limitations and decisions:
+
+- `NorESM2-MM` is excluded from the batch workflow because its 6-hour time steps are offset to `03 09 15 21`, which does not align with the standard `00 06 12 18` bias-correction workflow.
+- `UKESM1-0-LL` 3D configs are generated to use the local staged path on Gadi, not the remote Squall path.
+- `UKESM1-0-LL` 3D interpolation should be tested with one variable first after staging because the source files begin at `0600` rather than `0000`.
+

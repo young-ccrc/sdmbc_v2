@@ -1,0 +1,39 @@
+domain:
+  lat_max: 90
+  lat_min: -90
+  lon_max: 360
+  lon_min: 0
+experiment: mpi_esm1_2_hr_to_access_esm1_5_ssp126_2080_2100
+future:
+  hist_target_path: /g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1
+paths:
+  input_path: /g/data/oi10/replicas/CMIP6/ScenarioMIP/DKRZ/MPI-ESM1-2-HR/ssp126/r1i1p1f1
+  output_path: /g/data/w28/yk8692/input/model_as_truth/mpi_esm1_2_hr_to_access/ssp126_2080_2100/3d
+period:
+  endyear_h: 2100
+  startyear_h: 2080
+resources:
+  mem_gb: 190
+  ncpus: 48
+schema_version: 2
+source:
+  input_cinfor: r1i1p1f1
+  input_gname: MPI-ESM1-2-HR
+  input_infor: 6hrLev
+  input_model: gcm
+  input_period: ssp126
+  input_sinfor: gn
+  input_version: v20190710
+  input_z_path: null
+target:
+  cinfor: r6i1p1f1
+  gname: ACCESS-ESM1-5
+  infor: 6hrLev
+  period: ssp126
+  sinfor: gn
+  target_g_path: null
+  target_orog_path: /g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1
+  target_path: /g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp126/r6i1p1f1
+  target_path_sst: /g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp126/r6i1p1f1
+  version: v20200529
+workflow: interp_3d
