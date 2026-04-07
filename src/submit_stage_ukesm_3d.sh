@@ -10,4 +10,4 @@ fi
 
 PERIOD=$1
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-qsub -N "ukesm_stage_${PERIOD}" -v PERIOD="$PERIOD" "$SCRIPT_DIR/stage_ukesm_3d_to_gadi.pbs"
+qsub -N "ukesm_stage_${PERIOD}" -v PERIOD="$PERIOD",SCRIPT_DIR="$SCRIPT_DIR" "$SCRIPT_DIR/stage_ukesm_3d_to_gadi.pbs"
