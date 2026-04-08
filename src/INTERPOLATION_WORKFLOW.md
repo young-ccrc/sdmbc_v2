@@ -164,6 +164,13 @@ cd /g/data/w28/yk8692/sdmbc_v2/src
 ./submit_stage_ukesm_3d.sh ssp126
 ```
 
+By default this runs directly on the login node, because SSH from PBS compute jobs to Squall may be unreachable. If you need the old behavior explicitly, use:
+
+```bash
+./submit_stage_ukesm_3d.sh historical pbs
+./submit_stage_ukesm_3d.sh ssp126 pbs
+```
+
 The staging workflow copies files from Squall into a local raw directory and then creates a CMIP-like tree on Gadi so the existing interpolation code can use it directly.
 
 Current limitations and decisions:

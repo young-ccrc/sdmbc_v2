@@ -1,10 +1,9 @@
 #!/bin/bash
-#PBS -m ae
 #PBS -P n81
 #PBS -q normal
 #PBS -j oe
 #PBS -l wd
-#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/hh5+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
+#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/xp65+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
 
 set -eu
 
@@ -18,7 +17,7 @@ SCRIPT_PATH=${SCRIPT_PATH:-interp_obs2gcm.py}
 printf 'Starting time: '
 date
 
-module use /g/data3/hh5/public/modules
+module use /g/data/xp65/public/modules
 module load "conda/${MODULE_ANALYSIS}"
 
 printf 'Starting 3D interpolation for %s using %s

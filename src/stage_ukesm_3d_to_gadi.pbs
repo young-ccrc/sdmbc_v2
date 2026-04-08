@@ -1,5 +1,4 @@
 #!/bin/bash
-#PBS -m ae
 #PBS -P n81
 #PBS -q normal
 #PBS -j oe
