@@ -38,6 +38,12 @@ from dask.distributed import Client  # type: ignore
 from scipy.interpolate import interp1d  # type: ignore
 
 warnings.simplefilter("ignore", UserWarning)
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module=r"xarray.*",
+    message=r"In a future version of xarray the default value for data_vars will change.*",
+)
 
 
 # Start of the script -----------------------------------------------------
@@ -698,9 +704,32 @@ def _interpolate_profile_1d(
     return out
 
 
+def _align_time_dependent_inputs(*arrays):
+    """Align time-dependent arrays on their shared timestamps before ufuncs."""
+    timed = [arr for arr in arrays if isinstance(arr, xr.DataArray) and "time" in arr.dims]
+    if len(timed) < 2:
+        return arrays
+
+    common_time = timed[0].indexes["time"]
+    for arr in timed[1:]:
+        common_time = common_time.intersection(arr.indexes["time"])
+
+    aligned = []
+    for arr in arrays:
+        if isinstance(arr, xr.DataArray) and "time" in arr.dims:
+            aligned.append(arr.sel(time=common_time))
+        else:
+            aligned.append(arr)
+    return tuple(aligned)
+
+
 def vertical_interpolation(
     source_da, source_levels_da, target_levels, gcm_profile, gcm_levels
 ):
+    source_da, source_levels_da, target_levels, gcm_profile, gcm_levels = _align_time_dependent_inputs(
+        source_da, source_levels_da, target_levels, gcm_profile, gcm_levels
+    )
+
     vdim_src = get_vdim(source_da)
     vdim_slev = get_vdim(source_levels_da)
     vdim_tgt = get_vdim(target_levels)
@@ -930,7 +959,6 @@ def load_target_files(target_path, infor, sinfor, version, var, year):
     # Recursive, but constrained by {infor}/{var}/ to avoid Amon/day pulling in.
     pattern = f"{target_path}/{infor}/{var}/g*/v*/{var}_*{year}*.nc"
     files = glob.glob(pattern, recursive=True)
-    print(files)
     # Safeguard: if no files match, return empty list early
     if not files:
         raise FileNotFoundError(f"No files found for {pattern}. ")
@@ -1139,7 +1167,6 @@ def process_year_month(config, year, month, selected_variables):
     ValueError: If no data is available for the specified year, month, and variable.
     """
     selected_variables = normalize_target_variables(selected_variables)
-    print("selected_variables", selected_variables)
     tq_variables = ["ta", "hus"]
 
     # target_grids = {
@@ -1422,7 +1449,6 @@ def regrid_and_interpolate(
         if input_var in ["u", "v"]
         else "conservative" if input_var == "q" else "bilinear"
     )
-    print(method)
     if config["input_model"] == "reanalysis":
         input_files_pattern = glob.glob(
             f"{config['input_path']}/{input_var}/{year}/{input_var}_*_{year}{month:02d}*.nc"
