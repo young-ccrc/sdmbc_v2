@@ -124,13 +124,48 @@ def parse_arguments():
 
     parser.add_argument("--ncpus", type=int, default=None)
     parser.add_argument("--mem", type=int, default=None)
-
-    # parser.add_argument(
-    #     "--sy", type=int, default=config.startyear_h, help="Start year."
-    # )
-    # parser.add_argument("--ey", type=int, default=config.endyear_h, help="End year.")
+    parser.add_argument("--sy", type=int, default=None, help="Override start year.")
+    parser.add_argument("--ey", type=int, default=None, help="Override end year.")
 
     return parser.parse_args()
+
+
+def output_source_name(config):
+    return (
+        config["input_model"]
+        if config["input_model"] == "reanalysis"
+        else config["input_gname"]
+    )
+
+
+def expected_output_file(config, target_var, year, month):
+    return (
+        f"{config['output_path']}/{target_var}_{output_source_name(config)}"
+        f"_to_{config['gname']}_{year}-{month:02}.nc"
+    )
+
+
+def is_valid_output_file(output_file, target_var):
+    """
+    Treat an output file as reusable only if it contains the expected variable
+    and a non-empty time dimension.
+    """
+    if not os.path.exists(output_file):
+        return False
+
+    try:
+        with xr.open_dataset(output_file) as ds:
+            if target_var not in ds.data_vars:
+                return False
+            da = ds[target_var]
+            if "time" not in da.dims:
+                return False
+            if da.sizes.get("time", 0) == 0:
+                return False
+    except Exception:
+        return False
+
+    return True
 
 
 def normalize_target_variables(selected_variables):
@@ -249,9 +284,8 @@ def calculate_hybrid_height(a, b, orog):
 
 def calculate_pressure_levels(ap, b, ps):
     """
-    Calculate pressure at each model level by automatically broadcasting 'ap' and 'b'
-    against 'ps' across their shared dimensions ('lat', 'lon') and aligning them with
-    'ps' time dimension.
+    Calculate pressure at each model level by broadcasting 'ap' and 'b' against
+    surface pressure and returning a stable dimension order.
 
     Parameters:
     - ap: Xarray DataArray of 'ap' coefficient, shaped [lev]
@@ -262,15 +296,12 @@ def calculate_pressure_levels(ap, b, ps):
     - p_levels: Xarray DataArray of pressure at each model level, shaped [time, lev, lat, lon]
     """
 
-    # Ensure 'ap' and 'b' are broadcasted and aligned along 'ps' dimensions
-    # This uses Xarray's automatic alignment and broadcasting
-    ap_expanded = ap * xr.ones_like(
-        ps
-    )  # This automatically broadcasts 'ap' across 'ps' dimensions
-    b_expanded = b * xr.ones_like(ps)  # Similarly for 'b'
+    p_levels = ap + b * ps
 
-    # Calculate pressure at each model level
-    p_levels = ap_expanded + b_expanded * ps
+    desired_dims = [dim for dim in ("time", "lev", "lat", "lon") if dim in p_levels.dims]
+    if tuple(p_levels.dims) != tuple(desired_dims):
+        p_levels = p_levels.transpose(*desired_dims)
+
     return p_levels
 
 
@@ -736,6 +767,15 @@ def vertical_interpolation(
     vdim_gcm1 = get_vdim(gcm_profile)
     vdim_gcm2 = get_vdim(gcm_levels)
 
+    source_core_dim = "source_lev"
+    target_core_dim = "target_lev"
+
+    source_da = source_da.rename({vdim_src: source_core_dim})
+    source_levels_da = source_levels_da.rename({vdim_slev: source_core_dim})
+    target_levels = target_levels.rename({vdim_tgt: target_core_dim})
+    gcm_profile = gcm_profile.rename({vdim_gcm1: target_core_dim})
+    gcm_levels = gcm_levels.rename({vdim_gcm2: target_core_dim})
+
     out = xr.apply_ufunc(
         _interpolate_profile_1d,
         source_da,
@@ -744,13 +784,21 @@ def vertical_interpolation(
         gcm_profile,
         gcm_levels,
         vectorize=True,
-        input_core_dims=[[vdim_src], [vdim_slev], [vdim_tgt], [vdim_gcm1], [vdim_gcm2]],
-        output_core_dims=[[vdim_tgt]],
+        input_core_dims=[
+            [source_core_dim],
+            [source_core_dim],
+            [target_core_dim],
+            [target_core_dim],
+            [target_core_dim],
+        ],
+        output_core_dims=[[target_core_dim]],
         dask="parallelized",
         output_dtypes=[np.float64],
         join="override",
     )
-    return out.assign_coords({vdim_tgt: target_levels[vdim_tgt]})
+    out = out.rename({target_core_dim: vdim_tgt})
+    target_coord = target_levels[target_core_dim].rename({target_core_dim: vdim_tgt})
+    return out.assign_coords({vdim_tgt: target_coord})
 
 
 def standardize_coords_from(ds):
@@ -978,6 +1026,94 @@ def load_target_files(target_path, infor, sinfor, version, var, year):
 
 
 # clear
+def resolve_orog_file(orog_path):
+    """
+    Resolve an orography input to a concrete NetCDF file.
+
+    Parameters:
+    orog_path (str): Either a full file path or a CMIP6 model root containing fx/orog.
+
+    Returns:
+    str: Resolved orography file path.
+    """
+    if not orog_path or orog_path == "None":
+        raise FileNotFoundError("No source orography path was provided.")
+
+    if os.path.isfile(orog_path):
+        return orog_path
+
+    matches = sorted(glob.glob(f"{orog_path}/fx/orog/g*/v*/orog_fx_*.nc"))
+    if not matches:
+        raise FileNotFoundError(f"No orography files found at {orog_path}")
+    return matches[0]
+
+
+def load_gcm_source_month(config, year, month, var):
+    """
+    Load one monthly source-GCM variable using the CMIP6 path layout.
+    """
+    files = load_target_files(
+        config["input_path"],
+        config["input_infor"],
+        config["input_sinfor"],
+        config["input_version"],
+        var,
+        year,
+    )
+    ds = load_datasets(
+        year,
+        month,
+        files,
+        {"time": "auto", "lev": "auto", "lat": "auto", "lon": "auto"},
+    )
+    ds = standardize_coords_from(ds)
+    ds = correct_latitudes(ds).sel(time=ds["time"].dt.hour.isin([0, 6, 12, 18]))
+    ds["lat"] = ds["lat"].clip(-90, 90)
+    return ds
+
+
+def build_gcm_source_geopotential(config, year, month):
+    """
+    Build source-model geopotential height for GCM-as-input runs.
+
+    This mirrors the old ERA5 source-height role, but uses the source GCM's
+    own vertical metadata rather than the target model's zfull field.
+    """
+    source_t = load_gcm_source_month(config, year, month, "ta")
+    source_q = load_gcm_source_month(config, year, month, "hus")
+
+    lev_standard_name = source_t.lev.attrs.get("standard_name")
+    if lev_standard_name == "atmosphere_hybrid_height_coordinate":
+        z_candidates = sorted(glob.glob(f"{config['input_path']}/fx/zfull/g*/v*/zfull_fx_*.nc"))
+        if not z_candidates:
+            raise FileNotFoundError(
+                "Source GCM uses hybrid-height levels but no source zfull file was found."
+            )
+        source_zfull = xr.open_dataset(
+            z_candidates[0], chunks={"lev": -1, "lat": -1, "lon": -1}
+        )["zfull"].transpose("lev", "lat", "lon")
+        return source_zfull
+
+    if lev_standard_name != "atmosphere_hybrid_sigma_pressure_coordinate":
+        raise ValueError(
+            f"Unsupported source vertical coordinate: {lev_standard_name}"
+        )
+
+    source_orog_file = resolve_orog_file(config.get("input_orog_path"))
+    source_orog = xr.open_dataset(
+        source_orog_file, chunks={"lat": -1, "lon": -1}
+    )["orog"]
+    source_orog = standardize_coords_from(source_orog.to_dataset(name="orog"))["orog"]
+    source_orog = correct_latitudes(source_orog)
+    source_orog["lat"] = source_orog["lat"].clip(-90, 90)
+
+    source_p = calculate_pressure_levels(source_t.ap, source_t.b, source_t.ps)
+    source_zfull = compute_geopotential_height(
+        source_p, source_t.ta, source_orog, source_q.hus
+    )
+    return source_zfull.chunk({"time": 10, "lev": -1, "lat": -1, "lon": -1})
+
+
 def load_datasets_with_history(year, month, files, chunks, config, var, target_path):
     """
     Load datasets (future or historical) and, if the future starts at a non-zero hour,
@@ -1522,6 +1658,10 @@ def regrid_and_interpolate(
         g_era5_resampled = correct_latitudes(g_era5).sel(
             time=g_era5["time"].dt.hour.isin([0, 6, 12, 18])
         )
+    elif config["input_model"] == "gcm":
+        g_era5_resampled = standardize_coords_from(
+            build_gcm_source_geopotential(config, year, month)
+        )
     else:
         result = process_year_month(config, year, month, target_var)
         if result is not None:
@@ -1743,7 +1883,14 @@ def map_obs_name(target_var):
 # End of the functions -------------------------------------------------------
 
 
-def main(config_path, var_interp, override_ncpus=None, override_mem=None):
+def main(
+    config_path,
+    var_interp,
+    override_ncpus=None,
+    override_mem=None,
+    override_start_year=None,
+    override_end_year=None,
+):
     """
     Main function to perform interpolation of variables from observational data to GCM (General Circulation Model) grid.
 
@@ -1776,6 +1923,10 @@ def main(config_path, var_interp, override_ncpus=None, override_mem=None):
         ncpus = override_ncpus
     if override_mem:
         mem_gb = override_mem
+    if override_start_year is not None:
+        config["startyear_h"] = override_start_year
+    if override_end_year is not None:
+        config["endyear_h"] = override_end_year
 
     # Dask performance settings
     dask.config.set(
@@ -1807,12 +1958,16 @@ def main(config_path, var_interp, override_ncpus=None, override_mem=None):
 
         for year in range(start_year, end_year + 1):
             for month in range(1, 13):
-                output_file = f"{config['output_path']}/{target_var}_{config['input_model'] if config['input_model'] == 'reanalysis' else config['input_gname']}_to_{config['gname']}_{year}-{month:02}.nc"
-                if os.path.exists(output_file):
+                output_file = expected_output_file(config, target_var, year, month)
+                if is_valid_output_file(output_file, target_var):
                     print(
-                        f"[INFO] Output file already exists: {output_file}. Skipping..."
+                        f"[INFO] Valid output file already exists: {output_file}. Skipping..."
                     )
                     continue
+                if os.path.exists(output_file):
+                    print(
+                        f"[WARN] Existing output file is invalid or incomplete: {output_file}. Recomputing..."
+                    )
 
                 result = process_year_month(config, year, month, target_names)
                 if config["input_model"] == "reanalysis":
@@ -1837,6 +1992,6 @@ def main(config_path, var_interp, override_ncpus=None, override_mem=None):
 
 if __name__ == "__main__":
     args = parse_arguments()
-    main(args.yp, args.var, args.ncpus, args.mem)
+    main(args.yp, args.var, args.ncpus, args.mem, args.sy, args.ey)
 
     print("All done!")

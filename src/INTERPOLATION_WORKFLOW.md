@@ -109,6 +109,49 @@ That keeps the workflow explicit and reduces mistakes.
 
 The older config filenames are still kept in the repository for compatibility, but new work should prefer the descriptive names above.
 
+## Resume interrupted runs
+
+For interrupted runs, use the resume helper to scan the output directory, find the first missing monthly file, and submit only the remaining period.
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+./submit_interp_resume.sh 3d config_interp_3d_ecearth3veg_to_access_hist.yaml ta
+```
+
+You can also restrict the scan window, for example:
+
+```bash
+STARTYEAR_OVERRIDE=2013 ENDYEAR_OVERRIDE=2014 ./submit_interp_resume.sh 3d config_interp_3d_ecearth3veg_to_access_hist.yaml ta
+```
+
+This does not overwrite completed monthly files. It submits from the first missing month's year, and the interpolation script still skips any monthly file that already exists.
+
+## Chunked submissions
+
+For long 3D runs, prefer chunked year ranges rather than one full-period job.
+The interpolation already skips any monthly output file that exists, so reruns are restartable.
+
+Submit a single chunk directly:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+STARTYEAR_OVERRIDE=1984 ENDYEAR_OVERRIDE=1994 ./submit_interp.sh 3d config_interp_3d_ecearth3veg_to_access_hist.yaml ta interp_ecearth3veg_ta_1984_1994
+```
+
+Submit multiple variables and chunks with the batch helper:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+./submit_interp_chunks.sh 3d config_interp_3d_ecearth3veg_to_access_hist.yaml ta,ua,va,hus 1984-1994,1995-2004,2005-2014 ecearth_hist
+```
+
+A practical chunking pattern is:
+
+- historical: `1984-1994`, `1995-2004`, `2005-2014`
+- future: `2080-2090`, `2091-2100`
+
+This reduces walltime risk, limits restart cost, and keeps output growth manageable.
+
 ## Model-as-truth batch workflow
 
 ACCESS-ESM1-5 is used as the fixed target grid.

@@ -19,6 +19,7 @@ source:
   input_gname: EC-Earth3-Veg
   input_infor: 6hrLev
   input_model: gcm
+  input_orog_path: /g/data/oi10/replicas/CMIP6/CMIP/EC-Earth-Consortium/EC-Earth3/historical/r1i1p1f1
   input_period: historical
   input_sinfor: gr
   input_version: v20210601

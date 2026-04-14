@@ -11,8 +11,9 @@ CONFIG=${CONFIG:?CONFIG is required}
 VAR=${VAR:?VAR is required}
 NCPUS=${NCPUS:-48}
 MEM_GB=${MEM_GB:-190}
-MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3-24.01}
+MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3}
 SCRIPT_PATH=${SCRIPT_PATH:-interp_obs2gcm.py}
+PYTHON_ARGS=${PYTHON_ARGS:-}
 
 printf 'Starting time: '
 date
@@ -22,7 +23,7 @@ module load "conda/${MODULE_ANALYSIS}"
 
 printf 'Starting 3D interpolation for %s using %s
 ' "$VAR" "$CONFIG"
-python "$SCRIPT_PATH" --yp "$CONFIG" --var "$VAR" --ncpus "$NCPUS" --mem "$MEM_GB"
+python "$SCRIPT_PATH" --yp "$CONFIG" --var "$VAR" --ncpus "$NCPUS" --mem "$MEM_GB" $PYTHON_ARGS
 
 printf 'Ending time: '
 date

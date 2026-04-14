@@ -9,7 +9,7 @@ set -eu
 
 CONFIG=${CONFIG:?CONFIG is required}
 VAR=${VAR:?VAR is required}
-MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3-24.04}
+MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3}
 SCRIPT_PATH=${SCRIPT_PATH:-interp_2d_obs2gcm_cdo.py}
 
 printf 'Starting time: '

@@ -15,6 +15,9 @@ Arguments:
 Optional environment overrides:
   NCPUS_OVERRIDE
   MEM_GB_OVERRIDE
+  JOBFS_GB_OVERRIDE
+  STARTYEAR_OVERRIDE
+  ENDYEAR_OVERRIDE
   WALLTIME_OVERRIDE
   MODULE_ANALYSIS_OVERRIDE
 
@@ -43,16 +46,22 @@ case "$KIND" in
         PYTHON_SCRIPT="$SCRIPT_DIR/interp_obs2gcm.py"
         NCPUS=${NCPUS_OVERRIDE:-48}
         MEM_GB=${MEM_GB_OVERRIDE:-190}
+        JOBFS_GB=${JOBFS_GB_OVERRIDE:-50}
+        STARTYEAR=${STARTYEAR_OVERRIDE:-}
+        ENDYEAR=${ENDYEAR_OVERRIDE:-}
         WALLTIME=${WALLTIME_OVERRIDE:-24:00:00}
-        MODULE_ANALYSIS=${MODULE_ANALYSIS_OVERRIDE:-analysis3-24.01}
+        MODULE_ANALYSIS=${MODULE_ANALYSIS_OVERRIDE:-analysis3}
         ;;
     surface)
         PBS_SCRIPT="$SCRIPT_DIR/interp_surface_job.pbs"
         PYTHON_SCRIPT="$SCRIPT_DIR/interp_2d_obs2gcm_cdo.py"
         NCPUS=${NCPUS_OVERRIDE:-48}
         MEM_GB=${MEM_GB_OVERRIDE:-190}
+        JOBFS_GB=${JOBFS_GB_OVERRIDE:-10}
+        STARTYEAR=${STARTYEAR_OVERRIDE:-}
+        ENDYEAR=${ENDYEAR_OVERRIDE:-}
         WALLTIME=${WALLTIME_OVERRIDE:-06:00:00}
-        MODULE_ANALYSIS=${MODULE_ANALYSIS_OVERRIDE:-analysis3-24.04}
+        MODULE_ANALYSIS=${MODULE_ANALYSIS_OVERRIDE:-analysis3}
         ;;
     *)
         echo "Unknown kind: $KIND" >&2
@@ -66,4 +75,20 @@ if [ ! -f "$CONFIG" ]; then
     exit 1
 fi
 
-qsub     -N "$JOB_NAME"     -l walltime="$WALLTIME"     -l mem="${MEM_GB}GB"     -l ncpus="$NCPUS"     -v CONFIG="$CONFIG",VAR="$VAR",NCPUS="$NCPUS",MEM_GB="$MEM_GB",MODULE_ANALYSIS="$MODULE_ANALYSIS",SCRIPT_PATH="$PYTHON_SCRIPT"     "$PBS_SCRIPT"
+
+PYTHON_ARGS=""
+if [ -n "$STARTYEAR" ]; then
+    PYTHON_ARGS="$PYTHON_ARGS --sy $STARTYEAR"
+fi
+if [ -n "$ENDYEAR" ]; then
+    PYTHON_ARGS="$PYTHON_ARGS --ey $ENDYEAR"
+fi
+
+qsub \
+    -N "$JOB_NAME" \
+    -l walltime="$WALLTIME" \
+    -l mem="${MEM_GB}GB" \
+    -l ncpus="$NCPUS" \
+    -l jobfs="${JOBFS_GB}GB" \
+    -v CONFIG="$CONFIG",VAR="$VAR",NCPUS="$NCPUS",MEM_GB="$MEM_GB",MODULE_ANALYSIS="$MODULE_ANALYSIS",SCRIPT_PATH="$PYTHON_SCRIPT",PYTHON_ARGS="$PYTHON_ARGS" \
+    "$PBS_SCRIPT"
