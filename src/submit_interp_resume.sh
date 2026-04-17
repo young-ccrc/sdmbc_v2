@@ -22,10 +22,11 @@ Optional environment overrides:
   MODULE_ANALYSIS_OVERRIDE
 
 Behavior:
-  - Scans monthly outputs in the configured output directory
-  - Finds the first missing YYYY-MM file in the requested year range
+  - Scans outputs in the configured output directory
+  - 3d: finds the first missing YYYY-MM file in the requested year range
+  - surface: finds the first missing YYYY annual file in the requested year range
   - Submits from that year to the requested end year
-  - Existing files are still skipped by interp_obs2gcm.py
+  - Existing valid files are still skipped by the interpolation scripts
 EOF
 }
 
@@ -82,23 +83,38 @@ STARTYEAR=${STARTYEAR_OVERRIDE:-$CONFIG_START}
 ENDYEAR=${ENDYEAR_OVERRIDE:-$CONFIG_END}
 
 FIRST_MISSING=""
-for YEAR in $(seq "$STARTYEAR" "$ENDYEAR"); do
-    for MONTH in $(seq 1 12); do
-        FILE=$(printf '%s/%s_%s_to_%s_%04d-%02d.nc' "$OUTPUT_PATH" "$VAR" "$SOURCE_NAME" "$TARGET_NAME" "$YEAR" "$MONTH")
+if [ "$KIND" = "surface" ]; then
+    for YEAR in $(seq "$STARTYEAR" "$ENDYEAR"); do
+        FILE=$(printf '%s/%s_%s_to_%s_%04d.nc' "$OUTPUT_PATH" "$VAR" "$SOURCE_NAME" "$TARGET_NAME" "$YEAR")
         if [ ! -f "$FILE" ]; then
-            FIRST_MISSING=$(printf '%04d-%02d' "$YEAR" "$MONTH")
-            break 2
+            FIRST_MISSING=$(printf '%04d' "$YEAR")
+            break
         fi
     done
-done
+else
+    for YEAR in $(seq "$STARTYEAR" "$ENDYEAR"); do
+        for MONTH in $(seq 1 12); do
+            FILE=$(printf '%s/%s_%s_to_%s_%04d-%02d.nc' "$OUTPUT_PATH" "$VAR" "$SOURCE_NAME" "$TARGET_NAME" "$YEAR" "$MONTH")
+            if [ ! -f "$FILE" ]; then
+                FIRST_MISSING=$(printf '%04d-%02d' "$YEAR" "$MONTH")
+                break 2
+            fi
+        done
+    done
+fi
 
 if [ -z "$FIRST_MISSING" ]; then
-    echo "All monthly outputs already exist for $VAR in $STARTYEAR-$ENDYEAR"
+    echo "All outputs already exist for $VAR in $STARTYEAR-$ENDYEAR"
     exit 0
 fi
 
-RESUME_YEAR=${FIRST_MISSING%-*}
-RESUME_MONTH=${FIRST_MISSING#*-}
+if [ "$KIND" = "surface" ]; then
+    RESUME_YEAR=$FIRST_MISSING
+    RESUME_MONTH=01
+else
+    RESUME_YEAR=${FIRST_MISSING%-*}
+    RESUME_MONTH=${FIRST_MISSING#*-}
+fi
 if [ -z "$JOB_NAME" ]; then
     JOB_NAME="resume_${KIND}_${VAR}_${RESUME_YEAR}_${RESUME_MONTH}"
 fi

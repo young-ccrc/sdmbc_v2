@@ -7,6 +7,9 @@ experiment: ecearth3veg_to_access_esm1_5_surface_hist
 paths:
   input_path_sst: /g/data/oi10/replicas/CMIP6/CMIP/EC-Earth-Consortium/EC-Earth3-Veg/historical/r1i1p1f1
   output_path: /g/data/w28/yk8692/input/model_as_truth/ecearth3veg_to_access/hist/surface
+  # Optional diagnostic output: remap the reference/target GCM SST from its
+  # native grid to that GCM's lat/lon orography grid. Disabled by default.
+  reference_sst_latlon_path: /g/data/w28/yk8692/input/model_as_truth/ecearth3veg_to_access/hist/surface/reference_sst_latlon
 period:
   endyear_h: 2014
   startyear_h: 1984
@@ -14,6 +17,7 @@ resources:
   mem_gb: 190
   ncpus: 48
 schema_version: 2
+write_reference_sst_latlon: false
 source:
   input_cinfor: r1i1p1f1
   input_gname: EC-Earth3-Veg

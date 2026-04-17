@@ -11,6 +11,8 @@ CONFIG=${CONFIG:?CONFIG is required}
 VAR=${VAR:?VAR is required}
 MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3}
 SCRIPT_PATH=${SCRIPT_PATH:-interp_2d_obs2gcm_cdo.py}
+PYTHON_ARGS=${PYTHON_ARGS:-}
+WATCHDOG_MINUTES=${WATCHDOG_MINUTES:-60}
 
 printf 'Starting time: '
 date
@@ -20,7 +22,63 @@ module load "conda/${MODULE_ANALYSIS}"
 
 printf 'Starting surface interpolation for %s using %s
 ' "$VAR" "$CONFIG"
-python "$SCRIPT_PATH" --yp "$CONFIG" --var "$VAR"
+
+latest_output_mtime() {
+python3 - "$CONFIG" "$VAR" <<'PYWATCH'
+import sys
+import yaml
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1])
+var = sys.argv[2]
+with cfg_path.open() as f:
+    data = yaml.safe_load(f) or {}
+merged = dict(data)
+for section in ("paths", "source", "target", "domain", "period", "resources", "future"):
+    if isinstance(data.get(section), dict):
+        merged.update(data[section])
+source_name = merged["input_model"] if merged["input_model"] == "reanalysis" else merged["input_gname"]
+output_dir = Path(merged["output_path"])
+prefix = f"{var}_{source_name}_to_{merged['gname']}_"
+latest = 0
+if output_dir.exists():
+    for path in output_dir.glob(f"{prefix}*.nc"):
+        try:
+            latest = max(latest, int(path.stat().st_mtime))
+        except OSError:
+            pass
+print(latest)
+PYWATCH
+}
+
+python "$SCRIPT_PATH" --yp "$CONFIG" --var "$VAR" $PYTHON_ARGS &
+main_pid=$!
+last_seen_mtime=$(latest_output_mtime)
+last_progress_epoch=$(date +%s)
+
+while kill -0 "$main_pid" 2>/dev/null; do
+    sleep 300
+    current_mtime=$(latest_output_mtime)
+    now_epoch=$(date +%s)
+
+    if [ "$current_mtime" -gt "$last_seen_mtime" ]; then
+        last_seen_mtime="$current_mtime"
+        last_progress_epoch="$now_epoch"
+        echo "[INFO] Watchdog observed a new output file for $VAR."
+    fi
+
+    if [ $((now_epoch - last_progress_epoch)) -ge $((WATCHDOG_MINUTES * 60)) ]; then
+        echo "[WARN] No new output file detected for ${WATCHDOG_MINUTES} minutes. Terminating $VAR interpolation."
+        kill "$main_pid" 2>/dev/null || true
+        sleep 30
+        kill -0 "$main_pid" 2>/dev/null && kill -9 "$main_pid" 2>/dev/null || true
+        wait "$main_pid" || true
+        echo "[WARN] Resume with: ./submit_interp_resume.sh surface $(basename "$CONFIG") $VAR"
+        exit 124
+    fi
+done
+
+wait "$main_pid"
 
 printf 'Ending time: '
 date

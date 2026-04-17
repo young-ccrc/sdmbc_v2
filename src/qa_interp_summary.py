@@ -36,6 +36,11 @@ def expected_output_path(config, var, year, month):
     return Path(config["output_path"]) / name
 
 
+def expected_annual_output_path(config, var, year):
+    name = f"{var}_{source_name(config)}_to_{config['gname']}_{year}.nc"
+    return Path(config["output_path"]) / name
+
+
 def inspect_file(path, var):
     issues = []
     try:
@@ -68,6 +73,7 @@ def main():
     config = load_config(args.config)
     start_year = args.sy if args.sy is not None else config["startyear_h"]
     end_year = args.ey if args.ey is not None else config["endyear_h"]
+    annual_outputs = config.get("workflow") == "interp_surface"
 
     any_issue = False
     for var in args.var:
@@ -77,9 +83,17 @@ def main():
         missing = []
         bad = []
 
-        for year, month in month_range(start_year, end_year):
+        if annual_outputs:
+            periods = ((year, None) for year in range(start_year, end_year + 1))
+        else:
+            periods = month_range(start_year, end_year)
+
+        for year, month in periods:
             expected += 1
-            output_path = expected_output_path(config, var, year, month)
+            if annual_outputs:
+                output_path = expected_annual_output_path(config, var, year)
+            else:
+                output_path = expected_output_path(config, var, year, month)
             if not output_path.exists():
                 missing.append(output_path.name)
                 continue

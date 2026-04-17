@@ -78,6 +78,8 @@ def parse_arguments():
         required=True,
         help="Surface variable to interpolate, for example tos.",
     )
+    parser.add_argument("--sy", type=int, default=None, help="Optional start year override.")
+    parser.add_argument("--ey", type=int, default=None, help="Optional end year override.")
     return parser.parse_args()
 
 
@@ -160,16 +162,92 @@ def is_within_period(file_start, file_end, target_start, target_end):
     return not (file_end < target_start or file_start > target_end)
 
 
+def output_source_name(config):
+    return config["input_model"] if config["input_model"] == "reanalysis" else config["input_gname"]
+
+
+def expected_annual_output_file(config, target_var, year):
+    return os.path.join(
+        config["output_path"],
+        f"{target_var}_{output_source_name(config)}_to_{config['gname']}_{year}.nc",
+    )
+
+
+def is_valid_output_file(output_file, target_var):
+    if not os.path.exists(output_file):
+        return False
+    try:
+        with xr.open_dataset(output_file) as ds:
+            if target_var not in ds.data_vars:
+                return False
+            if "time" not in ds[target_var].dims:
+                return False
+            if ds[target_var].sizes.get("time", 0) == 0:
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def remap_reference_gcm_sst_to_latlon(config, target_var, target_grid_file, start_year, end_year):
+    """Optionally remap reference GCM SST from native i/j grid to lat/lon.
+
+    This is useful for diagnostics or later workflows that need the target or
+    reference GCM's own SST on the same lat/lon grid used by the 3D variables.
+    It is disabled by default because it creates extra intermediate files.
+    """
+    write_latlon = config.get(
+        "write_reference_sst_latlon",
+        config.get("write_target_sst_latlon", False),
+    )
+    if not write_latlon:
+        return
+
+    reference_path = config["target_path_sst"]
+    reference_output_path = config.get(
+        "reference_sst_latlon_path",
+        config.get(
+            "target_sst_latlon_path",
+            os.path.join(config["output_path"], "reference_sst_latlon"),
+        ),
+    )
+    os.makedirs(reference_output_path, exist_ok=True)
+
+    reference_files = sorted(glob.glob(f"{reference_path}/Oday/{target_var}/g*/v*/{target_var}_*"))
+    filtered_files = [
+        f
+        for f in reference_files
+        if is_within_period(*extract_years(f), start_year, end_year)
+    ]
+
+    for file in filtered_files:
+        file_start, file_end = extract_years(file)
+        if file_start is None or file_end is None:
+            print(f"[WARN] Could not parse reference SST years from {file}. Skipping.")
+            continue
+        for output_year in range(max(file_start, start_year), min(file_end, end_year) + 1):
+            output_file = os.path.join(
+                reference_output_path,
+                f"{target_var}_{config['gname']}_latlon_{output_year}.nc",
+            )
+            if is_valid_output_file(output_file, target_var):
+                print(f"Skipping existing valid reference SST lat/lon file: {output_file}")
+                continue
+            print(f"Optionally remapping reference SST {target_var} for {output_year} to lat/lon...")
+            cdo.remapbil(target_grid_file, input=file, output=output_file)
+            print(f"Remapped reference SST: {file} -> {output_file}")
+
+
 # End of the functions -------------------------------------------------------
-def main(config_path, var_interp):
+def main(config_path, var_interp, start_year_override=None, end_year_override=None):
 
     config = load_config(config_path)
     config["var_interp"] = var_interp
     client = setup_client()
 
     # Define start and end years
-    start_year = config["startyear_h"]
-    end_year = config["endyear_h"]
+    start_year = start_year_override if start_year_override is not None else config["startyear_h"]
+    end_year = end_year_override if end_year_override is not None else config["endyear_h"]
     target_path = config["target_path_sst"]
     input_path = config["input_path_sst"]
     output_path = config["output_path"]
@@ -191,32 +269,12 @@ def main(config_path, var_interp):
     # Ensure output directory exists
     os.makedirs(config["output_path"], exist_ok=True)
 
-    # sst
-    # ds = xr.open_mfdataset(target_files, combine="by_coords")
-
-    # Filter files that overlap with the desired year range
-    # GCM
-    # Load the target dataset
-    target_files = sorted(
-        glob.glob(f"{target_path}/Oday/{target_2d}/g*/v*/{target_2d}_*")
-    )
-
-    filtered_files = [
-        f
-        for f in target_files
-        if is_within_period(*extract_years(f), start_year, end_year)
-    ]
-    # print(filtered_files)
     target_latlon_grid = glob.glob(f"{target_path}/fx/orog/g*/v*/orog_*.nc")
-
-    for file in filtered_files:
-        output_file = os.path.join(
-            output_path, os.path.basename(file).replace(".nc", "_remapped.nc")
-        )
-        # Regrid the dataset to lat/lon grid
-        print(f"Regridding variable {target_2d} to lat/lon...")
-        cdo.remapbil(target_latlon_grid[0], input=file, output=output_file)
-        print(f"Remapped: {file} -> {output_file}")
+    if not target_latlon_grid:
+        raise FileNotFoundError(f"No target orography file found under {target_path}/fx/orog")
+    remap_reference_gcm_sst_to_latlon(
+        config, target_2d, target_latlon_grid[0], start_year, end_year
+    )
 
     # Observation
     if input_model == "reanalysis":
@@ -304,18 +362,31 @@ def main(config_path, var_interp):
         ]
 
         for file in filtered_files:
-            output_file = os.path.join(
-                output_path, os.path.basename(file).replace(".nc", "_remapped.nc")
-            )
-            # Regrid the dataset to lat/lon grid
-            print(f"Regridding variable {input_2d} to lat/lon...")
-            cdo.remapbil(target_latlon_grid[0], input=file, output=output_file)
-            print(f"Remapped: {file} -> {output_file}")
+            file_start, file_end = extract_years(file)
+            if file_start is None or file_end is None:
+                print(f"[WARN] Could not parse years from {file}. Skipping.")
+                continue
+
+            output_years = range(max(file_start, start_year), min(file_end, end_year) + 1)
+            for output_year in output_years:
+                output_file = expected_annual_output_file(config, target_2d, output_year)
+                if is_valid_output_file(output_file, target_2d):
+                    print(f"Skipping existing valid output: {output_file}")
+                    continue
+
+                year_file = file
+                if file_start != output_year or file_end != output_year:
+                    print(f"[WARN] Multi-year SST file detected: {file}. Using full file for {output_year}.")
+
+                # Regrid the annual daily SST dataset to the target grid.
+                print(f"Regridding variable {input_2d} for {output_year} to target grid...")
+                cdo.remapbil(target_latlon_grid[0], input=year_file, output=output_file)
+                print(f"Remapped: {year_file} -> {output_file}")
 
 
 print("Interpolation complete.")
 
 if __name__ == "__main__":
     args = parse_arguments()
-    main(args.yp, args.var)
+    main(args.yp, args.var, start_year_override=args.sy, end_year_override=args.ey)
     print("All done!")
