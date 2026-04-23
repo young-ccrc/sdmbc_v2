@@ -52,3 +52,6 @@ Desktop.ini
 slurm-*.out
 *.o[0-9]*
 *.e[0-9]*
+# Python cache
+__pycache__/
+*.py[cod]
