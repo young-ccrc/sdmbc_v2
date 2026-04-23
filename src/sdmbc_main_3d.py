@@ -184,6 +184,10 @@ def dict_to_simplenamespace(d):
     return SimpleNamespace(**d)
 
 
+def use_flat_truth_paths(config):
+    return getattr(config, "input_model", "") in ("reanalysis", "model_as_truth")
+
+
 def main(config_path, override_ncpus=None, override_mem=None):
 
     # setup_client()
@@ -229,6 +233,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
     elevel = config.elevel
     obs_path = config.obs_path
     out_path = config.out_path
+    temp_root = getattr(config, "temp_root", out_path)
     input_model = config.input_model
     infor = config.infor
     gname = config.gname
@@ -280,7 +285,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
             generate_file_paths_obs(
                 config, obs_path, var, gname, startyear_h, endyear_h
             )
-            if config.input_model == "reanalysis"
+            if use_flat_truth_paths(config)
             else generate_file_paths(
                 config,
                 bc_hist_path,
@@ -304,7 +309,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 generate_file_paths_obs(
                     config, obs_path, var, gname, startyear_f, endyear_f
                 )
-                if config.input_model == "reanalysis"
+                if use_flat_truth_paths(config)
                 else generate_file_paths(
                     config,
                     bc_hist_path,
@@ -336,6 +341,22 @@ def main(config_path, override_ncpus=None, override_mem=None):
             file_paths_by_variable_obs[variables[0]][0],
         )
     )
+
+    if getattr(config, "single_grid_test", False):
+        single_lat = float(getattr(config, "single_lat", lat_min))
+        single_lon = float(getattr(config, "single_lon", lon_min))
+        lat_idx = int(abs(lat_values - single_lat).argmin())
+        lon_idx = int(abs(lon_values - single_lon).argmin())
+        lat_values = lat_values[lat_idx : lat_idx + 1]
+        lon_values = lon_values[lon_idx : lon_idx + 1]
+        lat_min = lat_max = float(lat_values[0])
+        lon_min = lon_max = float(lon_values[0])
+        lat_size = lon_size = 1
+        print(
+            f"[INFO] single_grid_test enabled at nearest grid cell: "
+            f"lat={lat_min}, lon={lon_min}"
+        )
+
     n_lat_tiles, n_lon_tiles = determine_tiles(config, lat_size, lon_size)
 
     print("start dask bc correction")
@@ -361,7 +382,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
         # lon_range = (lon_min, lon_max)
         print(f"Starting processing for level {level}")
 
-        temp_dir = os.path.join(out_path, f"temp_tiles_{gname}_{level}")
+        temp_dir = os.path.join(temp_root, f"temp_tiles_{gname}_{level}")
 
         os.makedirs(temp_dir, exist_ok=True)
         # ------------------ Load GCM Data ------------------
@@ -391,11 +412,12 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 endyear_h,
             )
         sliced_obs = xr.Dataset()
+        obs_domain = domain[0]
         for var_name in variables:
             # Construct the path to the preprocessed file for this variable
             obs_file = os.path.join(
                 temp_dir,
-                f"preprocessed_obs_{var_name}_lev_{level}_{tiles[0]['lat_min']}_{tiles[0]['lat_max']}_{tiles[0]['lon_min']}_{tiles[0]['lon_max']}_{startyear_h}_{endyear_h}.nc",
+                f"preprocessed_obs_{var_name}_lev_{level}_{obs_domain['lat_min']}_{obs_domain['lat_max']}_{obs_domain['lon_min']}_{obs_domain['lon_max']}_{startyear_h}_{endyear_h}.nc",
             )
             sliced_obs[var_name] = xr.open_dataset(obs_file)[
                 var_name
@@ -408,6 +430,14 @@ def main(config_path, override_ncpus=None, override_mem=None):
 
             # To store all bc_params for later concatenation
             all_bc_params = []
+            single_tile_fast_path = len(tiles) == 1
+            single_tile_corrected = None
+            single_tile_params = None
+            if single_tile_fast_path:
+                print(
+                    "[INFO] Single-tile fast path enabled: "
+                    "skipping temporary tile NetCDF writes."
+                )
             # # for idx, tile in enumerate(tiles):
             for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
                 #     for var_name, file_paths in file_paths_by_variable_obs.items():
@@ -467,7 +497,11 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 #     bc_corrected_gcm_hist_tile.compute().to_netcdf(output_file)
                 # else:
                 #     print(f"File {output_file} already exists. Skipping...")
-                if not os.path.exists(output_file):
+                if single_tile_fast_path:
+                    print(
+                        f"[INFO] Keeping corrected output for tile {idx}, level {level} in memory."
+                    )
+                elif not os.path.exists(output_file):
                     print(
                         f"Saving 3D output for tile {idx}, level {level} to {output_file}"
                     )
@@ -516,17 +550,22 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 #     ds_params.to_netcdf(output_params)
                 # else:
                 #     print(f"File {output_params} already exists. Skipping...")
-                if not os.path.exists(output_params):
+                if single_tile_fast_path:
+                    print(
+                        f"[INFO] Keeping BC params for tile {idx}, level {level} in memory."
+                    )
+                    single_tile_corrected = bc_corrected_gcm_hist_tile
+                    single_tile_params = ds_params.load()
+                elif not os.path.exists(output_params):
                     print(
                         f"Saving 3D params for tile {idx}, level {level} to {output_params}"
                     )
                     _atomic_to_netcdf(ds_params.load(), output_params)
                 else:
                     print(f"File {output_params} already exists. Skipping...")
-                # # Accumulate bc_params_tile for later concatenation
-                #  all_bc_params.append(bc_params_tile)
-                # Append the bc_params file path for later merging
-                all_bc_params.append(output_params)
+                if not single_tile_fast_path:
+                    # Append the bc_params file path for later merging.
+                    all_bc_params.append(output_params)
 
                 # Free memory after saving each tile
                 del bc_corrected_gcm_hist_tile, ds_params
@@ -554,14 +593,19 @@ def main(config_path, override_ncpus=None, override_mem=None):
             # # Concatenate all latitude bands along the latitude (axis=0)
             # full_param_array = np.concatenate(lat_band_tiles, axis=0)
 
-            # Load the bias-corrected tiles and combine them into a single dataset
-            tile_files = [
-                f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
-                for idx, tile in enumerate(tiles)
-            ]
-            full_bc_corrected = xr.open_mfdataset(
-                tile_files, combine="by_coords"
-            )  # Combine by matching coordinates
+            if single_tile_fast_path:
+                if single_tile_corrected is None or single_tile_params is None:
+                    raise RuntimeError("Single-tile fast path did not produce outputs.")
+                full_bc_corrected = single_tile_corrected
+            else:
+                # Load the bias-corrected tiles and combine them into a single dataset
+                tile_files = [
+                    f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
+                    for idx, tile in enumerate(tiles)
+                ]
+                full_bc_corrected = xr.open_mfdataset(
+                    tile_files, combine="by_coords"
+                )  # Combine by matching coordinates
 
             # # Extract the original latitude and longitude values (with duplicates)
             # original_lat_values = full_bc_corrected["lat"].values
@@ -667,9 +711,12 @@ def main(config_path, override_ncpus=None, override_mem=None):
             #     f"{out_path}/bc_params_3d_{period}_lev_{level}_{gname}_to_{input_model}_{startyear_h}_{endyear_h}.npy",
             #     full_param_array_corrected,
             # )
-            # Merge all tile bc_params NetCDF files into a single xarray Dataset for the whole domain.
-            # This uses xarray's open_mfdataset which combines datasets by matching coordinate values.
-            ds_full_params = xr.open_mfdataset(all_bc_params, combine="by_coords")
+            if single_tile_fast_path:
+                ds_full_params = single_tile_params
+            else:
+                # Merge all tile bc_params NetCDF files into a single xarray Dataset for the whole domain.
+                # This uses xarray's open_mfdataset which combines datasets by matching coordinate values.
+                ds_full_params = xr.open_mfdataset(all_bc_params, combine="by_coords")
 
             # If for any reason duplicate lat or lon values exist, remove duplicates.
             # xarray's merge usually handles non-overlapping coordinates, but if needed:

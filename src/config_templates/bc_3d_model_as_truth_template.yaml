@@ -1,0 +1,101 @@
+# Template: 3D SDMBCv2 model-as-truth bias correction.
+#
+# Copy this file to src/config_bc_3d_<truth>_to_<target>_<period>_<purpose>.yaml
+# and replace every value marked with CHANGE_ME before submitting.
+#
+# Role mapping:
+# - GCM to correct: target GCM historical/future data
+# - Truth/reference: another GCM already interpolated to the target grid/levels
+# - Variables: 3D atmospheric only. Correct SST separately with the surface flow.
+
+# Input and output paths.
+# Use a unique out_path for each experiment so test runs do not overwrite one another.
+bc_hist_path: CHANGE_ME_TARGET_GCM_HISTORICAL_6HRLEV_PATH
+bc_future_path: CHANGE_ME_TARGET_GCM_FUTURE_6HRLEV_PATH
+obs_path: CHANGE_ME_INTERPOLATED_TRUTH_GCM_HISTORICAL_3D_PATH
+out_path: CHANGE_ME_OUTPUT_DIRECTORY
+
+# Temporary preprocessing and tile files. Prefer scratch/jobfs-like storage for
+# speed; final outputs still go to out_path.
+temp_root: CHANGE_ME_SCRATCH_TEMP_DIRECTORY
+
+# Period selection.
+bc_hist: true
+bc_future: false
+startyear_h: 1984
+endyear_h: 2014
+startyear_f: 2080
+endyear_f: 2100
+
+# Target GCM historical metadata.
+infor: 6hrLev
+gname: CHANGE_ME_TARGET_GCM_NAME
+period: historical
+cinfor: CHANGE_ME_HISTORICAL_VARIANT
+sinfor: gn
+version: CHANGE_ME_HISTORICAL_VERSION
+
+# Target GCM future metadata. Used only when bc_future: true.
+scenario: ssp126
+cinfor_f: CHANGE_ME_FUTURE_VARIANT
+version_f: CHANGE_ME_FUTURE_VERSION
+period_f: ssp126
+
+# Bias-correction setup.
+# lateral means wind speed is corrected, then reconstructed back to ua/va.
+bc_boundary: lateral
+input_model: model_as_truth
+truth_gname: CHANGE_ME_TRUTH_GCM_NAME
+target_variable: [hus, ta, ua, va]
+
+# Vertical levels are processed independently.
+slevel: 0
+elevel: 0
+tlevel: 38
+
+# no_of_variables is 3 for lateral BC because the corrected variables are
+# wind speed, ta, and hus. ua/va are reconstructed after correction.
+no_of_variables: 3
+no_of_iterations: 1
+correction_model: 4
+sub_daily_correction: true
+
+# Domain selection.
+# Set single_grid_test: true for one-grid smoke tests. When false, the lat/lon
+# bounds define the regional or global tile domain.
+single_grid_test: false
+single_lat: CHANGE_ME_ONE_GRID_LAT
+single_lon: CHANGE_ME_ONE_GRID_LON
+lat_min: CHANGE_ME_DOMAIN_LAT_MIN
+lat_max: CHANGE_ME_DOMAIN_LAT_MAX
+lon_min: CHANGE_ME_DOMAIN_LON_MIN
+lon_max: CHANGE_ME_DOMAIN_LON_MAX
+
+# Maximum number of horizontal grid cells per processing tile, not the number
+# of tiles. Smaller values reduce memory per tile but create more tiles.
+max_tile_size: 1500
+
+# Physical bounds used by the correction routines.
+upper_limit: [190, 330, 100, 330]
+lower_limit: [0.001, 137, 0.001, 270]
+
+# Output and temporary-file handling.
+save_bc_output: true
+cleanup_bc_inputs: false
+
+# PBS resource defaults used by submit_bc_3d.sh unless overridden.
+resources:
+  ncpus: 8
+  mem_gb: 64
+
+# Search roots and CMIP table mapping for input discovery.
+archive_roots:
+  - /g/data/oi10/replicas/CMIP6
+  - /g/data/fs38/publications/CMIP6
+var_to_table:
+  hus: 6hrLev
+  ta: 6hrLev
+  ua: 6hrLev
+  va: 6hrLev
+  tos: Oday
+  ps: Amon

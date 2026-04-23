@@ -54,6 +54,81 @@ logging.getLogger("xarray").setLevel(logging.WARNING)
 logging.getLogger("dask").setLevel(logging.WARNING)
 
 
+def _interp_to_point_eager(data_var, target_lat, target_lon):
+    """
+    Interpolate a small lat/lon stencil to a single point eagerly.
+
+    This keeps the one-grid BC smoke test on the production intent for wind
+    variables while avoiding xarray/scipy/dask edge cases on tiny chunks.
+    """
+    if "lat" not in data_var.dims or "lon" not in data_var.dims:
+        return data_var
+
+    lat_vals = np.asarray(data_var.lat.values, dtype=float)
+    lon_vals = np.asarray(data_var.lon.values, dtype=float)
+    if lat_vals.size == 0 or lon_vals.size == 0:
+        raise ValueError("Cannot interpolate point from an empty lat/lon stencil.")
+
+    target_lat_val = float(np.asarray(target_lat).squeeze())
+    target_lon_val = float(np.asarray(target_lon).squeeze())
+
+    lat_order = np.argsort(lat_vals)
+    lon_order = np.argsort(lon_vals)
+    lat_sorted = lat_vals[lat_order]
+    lon_sorted = lon_vals[lon_order]
+
+    da = data_var.transpose(..., "lat", "lon")
+    values = np.asarray(da.values)
+    lead_dims = da.dims[:-2]
+    lead_shape = values.shape[:-2]
+    flat = values.reshape((-1, values.shape[-2], values.shape[-1]))
+
+    out = np.empty((flat.shape[0],), dtype=values.dtype)
+    for idx, slice2d in enumerate(flat):
+        slice_sorted = slice2d[np.ix_(lat_order, lon_order)]
+        lon_interp = np.array(
+            [np.interp(target_lon_val, lon_sorted, row) for row in slice_sorted]
+        )
+        out[idx] = np.interp(target_lat_val, lat_sorted, lon_interp)
+
+    out = out.reshape(lead_shape + (1, 1))
+    coords = {dim: da.coords[dim] for dim in lead_dims if dim in da.coords}
+    coords["lat"] = [target_lat_val]
+    coords["lon"] = [target_lon_val]
+    return xr.DataArray(
+        out, dims=lead_dims + ("lat", "lon"), coords=coords, attrs=da.attrs
+    )
+
+
+def _single_grid_wind_bounds(file_paths, target_lat, target_lon):
+    """
+    Return a small 3-point lat/lon stencil around the target point.
+
+    This is only used for the single-grid BC smoke test on staggered wind
+    variables so that the preprocessing step never degenerates to an empty
+    slice.
+    """
+    sample_path = file_paths[0] if isinstance(file_paths, (list, tuple)) else file_paths
+    with xr.open_dataset(sample_path) as sample:
+        lat_vals = np.asarray(sample.lat.values, dtype=float)
+        lon_vals = np.asarray(sample.lon.values, dtype=float)
+
+    if lat_vals.size == 0 or lon_vals.size == 0:
+        raise ValueError("Cannot determine wind stencil from empty coordinates.")
+
+    def _stencil(vals, target):
+        if vals.size <= 3:
+            return float(vals.min()), float(vals.max())
+        pos = int(np.searchsorted(vals, float(target)))
+        start = max(0, min(pos - 1, vals.size - 3))
+        stop = start + 3
+        return float(vals[start]), float(vals[stop - 1])
+
+    lat_min, lat_max = _stencil(lat_vals, target_lat)
+    lon_min, lon_max = _stencil(lon_vals, target_lon)
+    return (lat_min, lat_max), (lon_min, lon_max)
+
+
 # Helper: robust coordinate-to-index lookup (avoids nearest overlap and float mismatch)
 def _grid_index(coord_vals, target, tol=None):
     arr = np.asarray(coord_vals)
@@ -343,6 +418,12 @@ def apply_boundary_correction(config, six_hourly_data_hist, sliced_gcm):
     Returns:
         xarray.Dataset: Bias-corrected GCM data with boundaries applied.
     """
+
+    if getattr(config, "single_grid_test", False):
+        # The one-grid smoke test is only meant to exercise the BC core.
+        # Lateral boundary reconstruction expects a spatial field and is not
+        # meaningful for a single grid cell.
+        return six_hourly_data_hist
 
     if config.bc_boundary == "lateral":
         # Select the u and v wind components for the grid cells
@@ -972,16 +1053,30 @@ def preprocess_and_save_gcm(
     if not os.path.exists(temp_file):
         sliced_gcm = xr.Dataset()
         for var_name, file_paths in file_paths_by_variable_gcm.items():
+            var_lat_range = lat_range
+            var_lon_range = lon_range
+            if getattr(config, "single_grid_test", False) and var_name in ["ua", "va"]:
+                var_lat_range, var_lon_range = _single_grid_wind_bounds(
+                    file_paths,
+                    tile[0]["lat_min"],
+                    tile[0]["lon_min"],
+                )
+                print(
+                    f"[INFO] single_grid_test wind stencil for {var_name}: "
+                    f"lat_range={var_lat_range}, lon_range={var_lon_range}"
+                )
             data_var = load_preprocess_variable(
                 config,
                 file_paths,
                 var_name,
                 level,
-                lat_range,
-                lon_range,
+                var_lat_range,
+                var_lon_range,
                 config.startyear_h,
                 config.endyear_h,
             )
+            if isinstance(data_var, xr.Dataset):
+                data_var = data_var[var_name]
 
             # Check if the variable is one of the wind components with different lon
             if var_name in ["ua", "va"]:
@@ -990,23 +1085,39 @@ def preprocess_and_save_gcm(
                 target_lat = sliced_gcm.lat if "lat" in sliced_gcm else data_var.lat
                 target_lev = sliced_gcm.lev if "lev" in sliced_gcm else data_var.lev
 
-                # Interpolate va to match the target latitude grid
-                if not data_var.lat.equals(target_lat):
-                    data_var = data_var.interp(
-                        lat=target_lat,
-                        method="linear",
-                        kwargs={"fill_value": "extrapolate"},
+                if getattr(config, "single_grid_test", False):
+                    # One-grid tests keep a small local source stencil for
+                    # staggered wind grids, then interpolate to the scalar
+                    # cell. This preserves the production intent while
+                    # avoiding empty zero-width slices. Interpolate eagerly on
+                    # the tiny loaded stencil instead of using xarray/scipy
+                    # for this smoke test, because the full-stack path can hit
+                    # empty-array edge cases on very small Dask chunks.
+                    data_var = data_var.load()
+                    data_var = _interp_to_point_eager(
+                        data_var, target_lat, target_lon
                     )
-                if not data_var.lon.equals(target_lon):
-                    data_var = data_var.interp(
-                        lon=target_lon,
-                        method="linear",
-                        kwargs={"fill_value": "extrapolate"},
+                    data_var = data_var.assign_coords(
+                        lon=target_lon, lat=target_lat, lev=target_lev
                     )
-                # Assign the adjusted longitude values to ua or va
-                data_var = data_var.assign_coords(
-                    lon=target_lon, lat=target_lat, lev=target_lev
-                )
+                else:
+                    # Interpolate staggered wind grids to match scalar fields.
+                    if not data_var.lat.equals(target_lat):
+                        data_var = data_var.interp(
+                            lat=target_lat,
+                            method="linear",
+                            kwargs={"fill_value": "extrapolate"},
+                        )
+                    if not data_var.lon.equals(target_lon):
+                        data_var = data_var.interp(
+                            lon=target_lon,
+                            method="linear",
+                            kwargs={"fill_value": "extrapolate"},
+                        )
+                    # Assign the adjusted longitude values to ua or va
+                    data_var = data_var.assign_coords(
+                        lon=target_lon, lat=target_lat, lev=target_lev
+                    )
             if isinstance(
                 data_var, xr.Dataset
             ):  # Ensure we extract the correct DataArray
@@ -2179,4 +2290,3 @@ def convert_bc_params_to_xarray(config, bc_params_array, lat_values, lon_values)
         ds[k].attrs["original_shape"] = np.asarray(ref_shape_by_key[k], dtype=np.int64)
 
     return ds
-

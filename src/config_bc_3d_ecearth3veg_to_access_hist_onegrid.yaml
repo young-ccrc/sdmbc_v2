@@ -1,0 +1,73 @@
+# One-grid-cell historical SDMBCv2 test for model-as-truth.
+#
+# Role mapping:
+# - GCM to correct: ACCESS-ESM1-5 historical 6hrLev
+# - Truth/reference: EC-Earth3-Veg already interpolated to ACCESS grid/levels
+# - Variables: 3D atmospheric only. SST is corrected separately later.
+
+bc_hist_path: /g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1/6hrLev
+bc_future_path: /g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp126/r6i1p1f1/6hrLev
+obs_path: /g/data/w28/yk8692/input/model_as_truth/ecearth3veg_to_access/hist/3d
+out_path: /g/data/w28/yk8692/output/model_as_truth/ecearth3veg_to_access/bc_onegrid_hist_3d
+
+bc_hist: true
+bc_future: false
+startyear_h: 1984
+endyear_h: 2014
+startyear_f: 2080
+endyear_f: 2100
+
+infor: 6hrLev
+gname: ACCESS-ESM1-5
+period: historical
+cinfor: r6i1p1f1
+sinfor: gn
+version: v20200529
+
+scenario: ssp126
+cinfor_f: r6i1p1f1
+version_f: v20211213
+period_f: ssp126
+
+bc_boundary: lateral
+input_model: model_as_truth
+truth_gname: EC-Earth3-Veg
+target_variable: [hus, ta, ua, va]
+slevel: 0
+elevel: 0
+tlevel: 38
+no_of_variables: 3
+no_of_iterations: 1
+correction_model: 4
+sub_daily_correction: true
+
+# Exact one-grid test point. The driver snaps this to the nearest grid cell.
+single_grid_test: true
+single_lat: 12.5
+single_lon: 116.25
+lat_min: 12.5
+lat_max: 12.5
+lon_min: 116.25
+lon_max: 116.25
+max_tile_size: 1
+
+upper_limit: [190, 330, 100, 330]
+lower_limit: [0.001, 137, 0.001, 270]
+
+save_bc_output: true
+cleanup_bc_inputs: false
+
+resources:
+  ncpus: 8
+  mem_gb: 64
+
+archive_roots:
+  - /g/data/oi10/replicas/CMIP6
+  - /g/data/fs38/publications/CMIP6
+var_to_table:
+  hus: 6hrLev
+  ta: 6hrLev
+  ua: 6hrLev
+  va: 6hrLev
+  tos: Oday
+  ps: Amon

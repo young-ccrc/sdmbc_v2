@@ -42,7 +42,17 @@ import xarray as xr  # type: ignore
 # ==========================================================================#
 # calling fortran subroutines
 # from mrmbc import constants as cons  # type: ignore
-from mrmbc import mbc_subroutines as mbc  # type: ignore
+try:
+    from mrmbc import mbc_subroutines as mbc  # type: ignore
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "Could not import the compiled Fortran extension 'mrmbc'. "
+        "The extension is Python-version specific, for example "
+        "'mrmbc.cpython-311-...so' only works with Python 3.11. "
+        "Use an environment matching the compiled extension, or rebuild it "
+        "for the active Python with 'src/build_mrmbc.sh'. On NCI, the current "
+        "prebuilt extension is compatible with conda/analysis3-26.02."
+    ) from exc
 
 # import yaml  # type: ignore
 from data_preparation import is_leap_year

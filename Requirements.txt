@@ -49,6 +49,10 @@ wheel>=0.41
 
 # ============================================================
 # Notes:
+# - NCI Gadi: prefer the CLEX/ACCESS conda stack instead of pip, e.g.
+#     module use /g/data/xp65/public/modules
+#     module load conda/analysis3
+#   That environment satisfies the core scientific packages below (xarray, netCDF4, etc.).
 # - 'cdo' requires the CDO command-line tool installed separately.
 # - Optional modules (xclim, cartopy, geopandas) enhance visualization
 #   and spatial processing but are not strictly mandatory for batch runs.

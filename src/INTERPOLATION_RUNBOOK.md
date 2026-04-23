@@ -177,30 +177,7 @@ For one source model:
 5. Run historical `tos` chunked.
 6. Run quick QA for historical `tos`.
 7. Run the full validator on the historical set.
-8. Run the one-grid-cell SDMBCv2 historical test using all variables.
-9. Save SDMBCv2 parameters and required historical outputs.
-10. Remove historical interpolated NetCDF files only after the saved BC files are verified.
-11. Run future interpolation and apply the saved BC parameters.
-12. Remove future interpolated NetCDF files after final future BC outputs are verified.
-
-For the first 3D-only model-as-truth BC test, use the one-grid EC-Earth
-historical config:
-
-```bash
-cd /g/data/w28/yk8692/sdmbc_v2/src
-./submit_bc_3d.sh config_bc_3d_ecearth3veg_to_access_hist_onegrid.yaml bc_ecearth_onegrid_hist
-```
-
-This test uses:
-
-- ACCESS-ESM1-5 historical 6hrLev as the GCM to correct
-- interpolated EC-Earth3-Veg historical 3D files as the truth/reference
-- `hus`, `ta`, `ua`, `va`
-- one ACCESS grid cell
-- one vertical level first, to validate the workflow cheaply
-
-SST is intentionally excluded from this test and should be corrected later by
-the surface workflow.
+8. Move to `BC_RUNBOOK.md` for SDMBCv2 testing and production correction.
 
 ## Watchdog timeout
 

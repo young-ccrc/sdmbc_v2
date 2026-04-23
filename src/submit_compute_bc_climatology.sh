@@ -1,0 +1,81 @@
+#!/bin/bash
+set -eu
+
+usage() {
+    cat <<'EOF'
+Usage:
+  submit_compute_bc_climatology.sh <input_nc> [config_yaml] [job_name]
+
+Optional environment overrides:
+  PROJECT_OVERRIDE
+  OUTPUT_PATH_OVERRIDE
+  OUTDIR_OVERRIDE
+  BIAS_OUTPUT_PATH_OVERRIDE
+  REFERENCE_INPUT_OVERRIDE
+  CHUNKS_OVERRIDE
+  NCPUS_OVERRIDE
+  MEM_GB_OVERRIDE
+  JOBFS_GB_OVERRIDE
+  WALLTIME_OVERRIDE
+  MODULE_ANALYSIS_OVERRIDE
+  NO_BIAS_OVERRIDE=1
+  NO_MONTHLY_OVERRIDE=1
+  DAILY_OVERRIDE=1
+  NO_SEASONAL_OVERRIDE=1
+  NO_STD_OVERRIDE=1
+  STD_MONTHLY_MEANS_OVERRIDE=1
+  STD_SEASONAL_MEANS_OVERRIDE=1
+  STD_ANNUAL_MEANS_OVERRIDE=1
+
+Example:
+  ./submit_compute_bc_climatology.sh bc_corrected.nc config_bc_3d.yaml bc_climo
+EOF
+}
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
+    usage
+    exit 1
+fi
+
+INPUT_PATH=$(realpath "$1")
+CONFIG_PATH=""
+if [ "$#" -ge 2 ] && [ -n "${2:-}" ] && [ "$2" != "-" ]; then
+    CONFIG_PATH=$(realpath "$2")
+fi
+JOB_NAME=${3:-bc_climo}
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+PBS_SCRIPT="$SCRIPT_DIR/compute_bc_climatology.pbs"
+PYTHON_SCRIPT="$SCRIPT_DIR/compute_bc_climatology.py"
+
+NCPUS=${NCPUS_OVERRIDE:-8}
+MEM_GB=${MEM_GB_OVERRIDE:-64}
+JOBFS_GB=${JOBFS_GB_OVERRIDE:-20}
+WALLTIME=${WALLTIME_OVERRIDE:-12:00:00}
+MODULE_ANALYSIS=${MODULE_ANALYSIS_OVERRIDE:-analysis3-26.02}
+PROJECT=${PROJECT_OVERRIDE:-n81}
+
+if [ ! -f "$INPUT_PATH" ]; then
+    echo "Input not found: $INPUT_PATH" >&2
+    exit 1
+fi
+if [ -n "$CONFIG_PATH" ] && [ ! -f "$CONFIG_PATH" ]; then
+    echo "Config not found: $CONFIG_PATH" >&2
+    exit 1
+fi
+
+OUTPUT_PATH=${OUTPUT_PATH_OVERRIDE:-}
+OUTDIR_PATH=${OUTDIR_OVERRIDE:-}
+BIAS_OUTPUT_PATH=${BIAS_OUTPUT_PATH_OVERRIDE:-}
+REFERENCE_INPUT_PATH=${REFERENCE_INPUT_OVERRIDE:-}
+CHUNKS=${CHUNKS_OVERRIDE:-}
+
+qsub \
+    -P "$PROJECT" \
+    -N "$JOB_NAME" \
+    -l walltime="$WALLTIME" \
+    -l mem="${MEM_GB}GB" \
+    -l ncpus="$NCPUS" \
+    -l jobfs="${JOBFS_GB}GB" \
+    -v INPUT_PATH="$INPUT_PATH",CONFIG_PATH="$CONFIG_PATH",OUTPUT_PATH="$OUTPUT_PATH",OUTDIR_PATH="$OUTDIR_PATH",BIAS_OUTPUT_PATH="$BIAS_OUTPUT_PATH",REFERENCE_INPUT_PATH="$REFERENCE_INPUT_PATH",CHUNKS="$CHUNKS",MODULE_ANALYSIS="$MODULE_ANALYSIS",SCRIPT_PATH="$PYTHON_SCRIPT",NO_BIAS="${NO_BIAS_OVERRIDE:-0}",NO_MONTHLY="${NO_MONTHLY_OVERRIDE:-0}",DAILY="${DAILY_OVERRIDE:-0}",NO_SEASONAL="${NO_SEASONAL_OVERRIDE:-0}",NO_STD="${NO_STD_OVERRIDE:-0}",STD_MONTHLY_MEANS="${STD_MONTHLY_MEANS_OVERRIDE:-0}",STD_SEASONAL_MEANS="${STD_SEASONAL_MEANS_OVERRIDE:-0}",STD_ANNUAL_MEANS="${STD_ANNUAL_MEANS_OVERRIDE:-0}" \
+    "$PBS_SCRIPT"

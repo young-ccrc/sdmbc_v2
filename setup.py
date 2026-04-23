@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="sdmbc_v2",
-    version="0.1.0",
+    version="1.1.0.dev0",
     description="A Python package for bias correction of climate data",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -21,7 +21,7 @@ setup(
         "scipy",
         "cartopy",
     ],
-    python_requires=">=3.6",
+    python_requires=">=3.11",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

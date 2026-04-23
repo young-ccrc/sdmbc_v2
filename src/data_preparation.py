@@ -388,7 +388,7 @@ def generate_file_paths_obs(
         matching_file_paths = glob.glob(file_path_pattern)
         file_paths.extend(matching_file_paths)
 
-    return file_paths
+    return sorted(file_paths)
 
 
 def slice_data(config, ds):
@@ -481,18 +481,36 @@ def load_preprocess_variable(
     )
     # print(ds)
     if config.bc_boundary == "lateral":
-        ds_sel = (
-            ds[var_name]
-            .isel(lev=level_index)
-            .sel(lat=slice(*lat_range), lon=slice(*lon_range))
-            .sel(time=slice(f"{startyear_h}-01-01", f"{endyear_h}-12-31"))
-        )
+        ds_sel = ds[var_name].isel(lev=level_index)
     else:
-        ds_sel = (
-            ds[var_name]
-            .sel(lat=slice(*lat_range), lon=slice(*lon_range))
-            .sel(time=slice(f"{startyear_h}-01-01", f"{endyear_h}-12-31"))
-        )
+        ds_sel = ds[var_name]
+
+    # A one-grid-cell test often uses zero-width bounds. Some ACCESS variables
+    # are on staggered grids, so exact slicing can return an empty dimension.
+    # Scalar variables use the nearest source point. Wind variables keep a
+    # small local stencil so they can still be linearly interpolated onto the
+    # scalar grid in preprocess_and_save_gcm().
+    if float(lat_range[0]) == float(lat_range[1]) and float(lon_range[0]) == float(lon_range[1]):
+        target_lat = float(lat_range[0])
+        target_lon = float(lon_range[0])
+        if var_name in ["ua", "va"]:
+            lat_values = ds_sel["lat"].values
+            lon_values = ds_sel["lon"].values
+            lat_order = np.argsort(np.abs(lat_values - target_lat))[: min(3, len(lat_values))]
+            lon_order = np.argsort(np.abs(lon_values - target_lon))[: min(3, len(lon_values))]
+            lat_indexers = sorted(lat_order.tolist())
+            lon_indexers = sorted(lon_order.tolist())
+            ds_sel = ds_sel.isel(lat=lat_indexers, lon=lon_indexers)
+        else:
+            ds_sel = ds_sel.sel(
+                lat=[target_lat],
+                lon=[target_lon],
+                method="nearest",
+            )
+    else:
+        ds_sel = ds_sel.sel(lat=slice(*lat_range), lon=slice(*lon_range))
+
+    ds_sel = ds_sel.sel(time=slice(f"{startyear_h}-01-01", f"{endyear_h}-12-31"))
     # ds_sel = ds[var_name].sel(lat=slice(*lat_range), lon=slice(*lon_range))
     return ds_sel
 
@@ -1047,7 +1065,17 @@ def convert_6hr_to_original_xr(config, bias_corrected_data_xr, g_u_xr, g_v_xr):
     xarray Dataset
         The 6-hourly data in its original form (with bcu and bcv added as variables)
     """
-    bias_corrected_data_xr = bias_corrected_data_xr.squeeze()
+    # Keep singleton lat/lon dimensions for 1x1 tile tests. Dropping them turns
+    # the corrected field into a time series and breaks spatial reconstruction.
+    squeeze_dims = [
+        dim
+        for dim, size in bias_corrected_data_xr.sizes.items()
+        if size == 1 and dim not in {"time", "lat", "lon"}
+    ]
+    if squeeze_dims:
+        bias_corrected_data_xr = bias_corrected_data_xr.squeeze(
+            dim=squeeze_dims, drop=False
+        )
 
     # Pre-chunk the input datasets to optimize computation
     bias_corrected_data_xr = bias_corrected_data_xr.transpose(
