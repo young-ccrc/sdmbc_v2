@@ -233,6 +233,42 @@ def _select_common_bias_variables(
     return bc_sel, ref_sel, common_vars
 
 
+def _subset_reference_to_corrected_domain(
+    ref_ds: xr.Dataset,
+    bc_ds: xr.Dataset,
+    *,
+    level_index: int | None = None,
+) -> xr.Dataset:
+    """
+    Subset the reference time series to the corrected-output spatial domain
+    before climatology calculation.
+
+    This is critical for tile tests: opening and aggregating the full reference
+    domain is much more expensive than selecting the corrected lev/lat/lon first.
+    """
+    ds = ref_ds
+
+    if "lev" in ds.dims and "lev" in bc_ds.dims:
+        bc_lev_size = int(bc_ds.sizes["lev"])
+        ref_lev_size = int(ds.sizes["lev"])
+        if bc_lev_size == 1 and ref_lev_size > 1:
+            idx = 0 if level_index is None else int(level_index)
+            ds = ds.isel(lev=[idx])
+        elif ref_lev_size == 1 and bc_lev_size > 1:
+            target = np.asarray(ds["lev"].values)
+            ds = ds.sel(lev=target, method="nearest")
+        elif bc_lev_size == ref_lev_size:
+            target = np.asarray(bc_ds["lev"].values)
+            ds = ds.sel(lev=target, method="nearest")
+
+    for dim in ("lat", "lon"):
+        if dim in ds.dims and dim in bc_ds.dims:
+            target = np.asarray(bc_ds[dim].values)
+            ds = ds.sel({dim: target}, method="nearest")
+
+    return ds
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Climatological mean/std for bias-corrected SDMBC NetCDF time series.",
@@ -350,8 +386,13 @@ def main() -> None:
         return
 
     with ds_ref, xr.open_dataset(output_path, **open_kw) as out_bc_saved:
-        out_ref = build_bc_climatology_dataset(
+        ds_ref_subset = _subset_reference_to_corrected_domain(
             ds_ref,
+            out_bc_saved,
+            level_index=level_index,
+        )
+        out_ref = build_bc_climatology_dataset(
+            ds_ref_subset,
             monthly=not args.no_monthly,
             daily=args.daily,
             seasonal=not args.no_seasonal,

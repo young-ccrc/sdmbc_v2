@@ -13,6 +13,7 @@ It addresses systematic biases in GCMs to enhance the physical realism of Region
 
 - [Key Features](#key-features)
 - [Installation](#installation)
+- [Operational Docs](#operational-docs)
 - [Quick Start Guide](#quick-start-guide)
   - [1. Prepare Input Data (Interpolation)](#1-prepare-input-data-interpolation)
   - [2. Compile mrmbc with f2py](#2-compile-mrmbc-with-f2py)
@@ -48,6 +49,21 @@ pip install -r Requirements.txt
 
 ---
 
+## Operational Docs
+
+For current NCI workflows, start with:
+
+- `docs/WORKFLOW_INDEX.md`
+- `docs/runbooks/INTERPOLATION_RUNBOOK.md`
+- `docs/runbooks/BC_RUNBOOK.md`
+- `docs/runbooks/MRMBC_BUILD.md`
+
+The `src/` directory is kept for runnable code, reusable submit helpers, PBS
+templates, and reusable base configs. Generated configs, PBS logs, temporary
+files, and NetCDF outputs should stay outside the git tree.
+
+---
+
 ## Quick Start Guide
 
 ### 1. Prepare Input Data (Interpolation)
@@ -67,6 +83,7 @@ python src/interp_2d_obs2gcm_cdo.py --yp path/to/config/config.yaml --var tos --
 Note: Some GCMs store SST on i/j (curvilinear/tripolar) ocean grids (e.g., MOM, POP, NEMO/ORCA). Before running the 2D interpolation/bias-correction, first remap SST to a lat/lon grid.
 
 - Using CDO (bilinear):
+
 ```bash
 # Create target grid description from a lat/lon template
 cdo griddes target_ll.nc > target_grid.txt
@@ -75,6 +92,7 @@ cdo remapbil,target_grid.txt sst_ij.nc sst_ll.nc
 ```
 
 - Using xESMF (Python):
+
 ```python
 import xarray as xr, xesmf as xe
 src = xr.open_dataset("sst_ij.nc")           # contains 2D lon/lat for ocean grid
@@ -86,6 +104,7 @@ xr.Dataset({"sst": regridder(src["sst"])}).to_netcdf("sst_ll.nc")
 Use sst_ll.nc as the SST input for subsequent steps.
 
 ---
+
 ### 2. Compile mrmbc with f2py
 
 Compile the Fortran subroutines into a Python module (requires gfortran). Run these in the directory containing mbc_subroutines.f90:
@@ -157,11 +176,10 @@ This project is licensed under the [MIT License](LICENSE).
 
 If you use SDMBCv2 for your research, please cite:
 
-> Kim, Y. (2023). * A software for correcting systematic biases in RCM input boundary conditions. Environmental Modelling & Software, p.105799. https://doi.org/10.1016/j.envsoft.2023.105799 *.
+> Kim, Y. (2023). *A software for correcting systematic biases in RCM input boundary conditions. Environmental Modelling & Software, p.105799. <https://doi.org/10.1016/j.envsoft.2023.105799>*.
 
-> Kim, Y. (2023). * Can sub-daily multivariate bias correction of regional climate model boundary conditions improve simulation of the diurnal precipitation cycle? Geophysical Research Letters, 50, e2023GL104442. https://doi.org/10.1029/2023GL104442 *.
+> Kim, Y. (2023). *Can sub-daily multivariate bias correction of regional climate model boundary conditions improve simulation of the diurnal precipitation cycle? Geophysical Research Letters, 50, e2023GL104442. <https://doi.org/10.1029/2023GL104442>*.
 
 > [SDMBCv2 Documentation](https://young-k.notion.site/SDMBCv2-48a0670426514461a778848322178882?pvs=4)
 
 ---
-

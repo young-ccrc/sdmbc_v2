@@ -79,7 +79,7 @@ fi
 export PROJECT_OVERRIDE="$PROJECT"
 
 if [ -z "$COMPUTE_OUTPUT_PATH" ]; then
-    COMPUTE_OUTPUT_PATH=$(python - <<'PY' "$BC_INPUT"
+    COMPUTE_OUTPUT_PATH=$(python3 - <<'PY' "$BC_INPUT"
 from pathlib import Path
 import sys
 p = Path(sys.argv[1])
@@ -101,7 +101,7 @@ COMPUTE_JID_NUM=${COMPUTE_JID%%.*}
 
 BIAS_FILE=${COMPUTE_BIAS_OUTPUT_PATH:-}
 if [ -z "$BIAS_FILE" ]; then
-    BIAS_FILE=$(python - <<'PY' "$COMPUTE_OUTPUT_PATH"
+    BIAS_FILE=$(python3 - <<'PY' "$COMPUTE_OUTPUT_PATH"
 from pathlib import Path
 import sys
 p = Path(sys.argv[1])

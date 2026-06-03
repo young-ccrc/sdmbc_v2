@@ -1,0 +1,102 @@
+# Small-tile multi-level historical SDMBCv2 test for model-as-truth.
+#
+# Role mapping:
+# - GCM to correct: ACCESS-ESM1-5 historical 6hrLev
+# - Truth/reference: EC-Earth3-Veg already interpolated to ACCESS grid/levels
+# - Variables: 3D atmospheric only. SST is corrected separately later.
+
+# Input and output paths.
+# Keep this separate from the level-0-only tile output.
+bc_hist_path: /g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1/6hrLev
+bc_future_path: /g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp126/r6i1p1f1/6hrLev
+obs_path: /g/data/w28/yk8692/input/model_as_truth/ecearth3veg_to_access/hist/3d
+out_path: /g/data/w28/yk8692/output/model_as_truth/ecearth3veg_to_access/bc_tile_l0_4_hist_3d
+
+# Temporary preprocessing and tile files. Use scratch for speed and to avoid
+# filling /g/data with intermediates. Final outputs still go to out_path.
+temp_root: /scratch/n81/yk8692/sdmbc_v2_temp/ecearth3veg_to_access/bc_tile_l0_4_hist_3d
+
+# Period selection.
+# This config runs historical BC only. Future settings are kept for later reuse.
+bc_hist: true
+bc_future: false
+startyear_h: 1984
+endyear_h: 2014
+startyear_f: 2080
+endyear_f: 2100
+
+# ACCESS historical metadata used to locate the GCM files.
+infor: 6hrLev
+gname: ACCESS-ESM1-5
+period: historical
+cinfor: r6i1p1f1
+sinfor: gn
+version: v20200529
+
+# ACCESS future metadata. Used only when bc_future: true.
+scenario: ssp126
+cinfor_f: r6i1p1f1
+version_f: v20211213
+period_f: ssp126
+
+# Bias-correction setup.
+# lateral means wind speed is corrected, then reconstructed back to ua/va.
+bc_boundary: lateral
+input_model: model_as_truth
+truth_gname: EC-Earth3-Veg
+target_variable: [hus, ta, ua, va]
+
+# Vertical levels are processed independently. This test extends the validated
+# small tile from one level to five levels before expanding the domain.
+slevel: 5
+elevel: 10
+tlevel: 38
+
+# no_of_variables is 3 for lateral BC because the corrected variables are
+# wind speed, ta, and hus. ua/va are reconstructed after correction.
+no_of_variables: 3
+no_of_iterations: 1
+correction_model: 4
+sub_daily_correction: true
+
+# Domain selection.
+# Set single_grid_test: true only for one-grid smoke tests. When false, the
+# lat/lon bounds below define the regional tile-test domain.
+single_grid_test: false
+single_lat: 12.5
+single_lon: 116.25
+lat_min: 10
+lat_max: 15
+lon_min: 114
+lon_max: 120
+
+# Maximum number of horizontal grid cells per processing tile, not the number
+# of tiles. Smaller values reduce memory per tile but create more tiles.
+# Example: max_tile_size: 1 gives about one lat/lon cell per tile.
+# Example: max_tile_size: 1500 allows each tile to contain up to ~1500 cells.
+max_tile_size: 1500
+
+# Physical bounds used by the correction routines.
+upper_limit: [190, 330, 100, 330]
+lower_limit: [0.001, 137, 0.001, 270]
+
+# Output and temporary-file handling.
+save_bc_output: true
+cleanup_bc_inputs: false
+
+# PBS resource defaults used by submit_bc_3d.sh unless overridden.
+resources:
+  ncpus: 8
+  mem_gb: 64
+
+# Search roots and CMIP table mapping for input discovery.
+archive_roots:
+  - /g/data/oi10/replicas/CMIP6
+  - /g/data/fs38/publications/CMIP6
+var_to_table:
+  hus: 6hrLev
+  ta: 6hrLev
+  ua: 6hrLev
+  va: 6hrLev
+  tos: Oday
+  ps: Amon
