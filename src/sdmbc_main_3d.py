@@ -72,27 +72,39 @@ warnings.simplefilter("ignore", UserWarning)
 
 
 def setup_client(ncpus, mem_gb):
-    """
-    Dynamically set up a Dask client based on available CPUs and memory.
-    Prefer 1 thread per worker for HDF5/NetCDF workloads.
-    """
-    # Respect scheduler if not overridden
+    """Dynamically set up a Dask client based on available CPUs and memory."""
     ncpus = ncpus or int(os.environ.get("PBS_NCPUS", os.cpu_count() or 1))
 
-    threads_per_worker = 1
-    n_workers = max(1, ncpus // threads_per_worker)
-    mem_per_worker = int(mem_gb / n_workers)
+    threads_per_worker = int(os.environ.get("DASK_THREADS_PER_WORKER") or "1")
+    n_workers_default = max(1, ncpus // threads_per_worker)
+    n_workers = int(os.environ.get("DASK_N_WORKERS") or str(n_workers_default))
+    processes = (os.environ.get("DASK_PROCESSES") or "true").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    mem_per_worker = max(1, int(mem_gb / n_workers))
+    local_directory = os.environ.get("DASK_LOCAL_DIRECTORY") or os.environ.get(
+        "DASK_TEMPORARY_DIRECTORY"
+    )
+    if local_directory:
+        os.makedirs(local_directory, exist_ok=True)
 
     print(
-        f"[INFO] Starting Dask client: {n_workers} workers × {threads_per_worker} threads"
+        f"[INFO] Starting Dask client: {n_workers} workers × {threads_per_worker} threads "
+        f"(processes={processes})"
     )
     print(f"[INFO] Each worker memory limit: {mem_per_worker}GB")
+    if local_directory:
+        print(f"[INFO] Dask local directory: {local_directory}")
 
     return Client(
         n_workers=n_workers,
         threads_per_worker=threads_per_worker,
-        processes=True,
+        processes=processes,
         memory_limit=f"{mem_per_worker}GB",
+        local_directory=local_directory,
     )
 
 
@@ -229,6 +241,10 @@ def main(config_path, override_ncpus=None, override_mem=None):
     lat_min = config.lat_min
     lon_max = config.lon_max
     lon_min = config.lon_min
+    requested_lat_min = float(lat_min)
+    requested_lat_max = float(lat_max)
+    requested_lon_min = float(lon_min)
+    requested_lon_max = float(lon_max)
     slevel = config.slevel
     elevel = config.elevel
     obs_path = config.obs_path
@@ -342,6 +358,31 @@ def main(config_path, override_ncpus=None, override_mem=None):
         )
     )
 
+    # expand_config_bounds_from_data snaps to the available grid and may widen
+    # the domain. Clip back to explicitly requested bounds so tests can exclude
+    # invalid pole rows such as lat=-90/90 after interpolation.
+    lat_mask = (lat_values >= requested_lat_min) & (lat_values <= requested_lat_max)
+    lon_mask = (lon_values >= requested_lon_min) & (lon_values <= requested_lon_max)
+    lat_values = lat_values[lat_mask]
+    lon_values = lon_values[lon_mask]
+    if lat_values.size == 0 or lon_values.size == 0:
+        raise ValueError(
+            "Requested domain has no grid cells after clipping: "
+            f"lat={requested_lat_min}:{requested_lat_max}, "
+            f"lon={requested_lon_min}:{requested_lon_max}"
+        )
+    lat_min = float(lat_values[0])
+    lat_max = float(lat_values[-1])
+    lon_min = float(lon_values[0])
+    lon_max = float(lon_values[-1])
+    lat_size = lat_values.size
+    lon_size = lon_values.size
+    print(
+        f"[INFO] effective domain after requested-bound clipping: "
+        f"lat={lat_min}:{lat_max} ({lat_size}), "
+        f"lon={lon_min}:{lon_max} ({lon_size})"
+    )
+
     if getattr(config, "single_grid_test", False):
         single_lat = float(getattr(config, "single_lat", lat_min))
         single_lon = float(getattr(config, "single_lon", lon_min))
@@ -367,6 +408,42 @@ def main(config_path, override_ncpus=None, override_mem=None):
         lat_values,
         lon_values,
     )
+    tile_items = list(enumerate(tiles))
+
+    tile_ids_env = os.environ.get("SDMBC_TILE_IDS")
+    tile_start_env = os.environ.get("SDMBC_TILE_START")
+    tile_end_env = os.environ.get("SDMBC_TILE_END")
+    if tile_ids_env:
+        selected_ids = {
+            int(value.strip())
+            for value in tile_ids_env.split(",")
+            if value.strip()
+        }
+        tile_items = [(idx, tile) for idx, tile in tile_items if idx in selected_ids]
+        print(f"[INFO] selected tile ids: {sorted(selected_ids)}")
+    elif tile_start_env is not None or tile_end_env is not None:
+        tile_start = int(tile_start_env or 0)
+        tile_end = int(tile_end_env or len(tiles))
+        tile_start = max(0, tile_start)
+        tile_end = min(len(tiles), tile_end)
+        tile_items = [
+            (idx, tile)
+            for idx, tile in tile_items
+            if tile_start <= idx < tile_end
+        ]
+        print(f"[INFO] selected tile range: [{tile_start}, {tile_end})")
+
+    if not tile_items:
+        raise ValueError("No tiles selected for processing.")
+    print(f"[INFO] processing {len(tile_items)} of {len(tiles)} tiles")
+    skip_merge = (os.environ.get("SDMBC_SKIP_MERGE") or "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if skip_merge:
+        print("[INFO] SDMBC_SKIP_MERGE=true: tile outputs will not be merged in this job")
     # print('tiles', tiles)
     domain = split_domain(
         n_lat_tiles=1,
@@ -374,6 +451,13 @@ def main(config_path, override_ncpus=None, override_mem=None):
         lat_values=lat_values,
         lon_values=lon_values,
     )
+    preprocess_scope = str(getattr(config, "preprocess_scope", "domain")).lower()
+    if preprocess_scope not in {"domain", "tile"}:
+        raise ValueError(
+            "preprocess_scope must be 'domain' or 'tile', "
+            f"got {preprocess_scope!r}"
+        )
+    print(f"[INFO] preprocess_scope={preprocess_scope}")
 
     for level in range(slevel, elevel + 1):
         # Record the start time for this level
@@ -385,52 +469,53 @@ def main(config_path, override_ncpus=None, override_mem=None):
         temp_dir = os.path.join(temp_root, f"temp_tiles_{gname}_{level}")
 
         os.makedirs(temp_dir, exist_ok=True)
-        # ------------------ Load GCM Data ------------------
-        temp_gcm = preprocess_and_save_gcm(
-            config,
-            domain,
-            file_paths_by_variable_gcm,
-            temp_dir,
-            level,
-        )
-        sliced_gcm = xr.open_dataset(
-            f"{temp_dir}/preprocessed_{gname}_lev_{level}_{domain[0]['lat_min']}_{domain[0]['lat_max']}_{domain[0]['lon_min']}_{domain[0]['lon_max']}.nc"
-        )
-
-        # ------------------ Load GCM Data end ------------------
-
-        # ------------------ Load Obs Data ------------------
-        for var_name, file_paths in file_paths_by_variable_obs.items():
-            temp_netcdf = preprocess_and_save_obs(
+        if preprocess_scope == "domain":
+            # ------------------ Load GCM Data ------------------
+            temp_gcm = preprocess_and_save_gcm(
                 config,
                 domain,
-                file_paths,
+                file_paths_by_variable_gcm,
                 temp_dir,
-                var_name,
                 level,
-                startyear_h,
-                endyear_h,
             )
-        sliced_obs = xr.Dataset()
-        obs_domain = domain[0]
-        for var_name in variables:
-            # Construct the path to the preprocessed file for this variable
-            obs_file = os.path.join(
-                temp_dir,
-                f"preprocessed_obs_{var_name}_lev_{level}_{obs_domain['lat_min']}_{obs_domain['lat_max']}_{obs_domain['lon_min']}_{obs_domain['lon_max']}_{startyear_h}_{endyear_h}.nc",
+            sliced_gcm = xr.open_dataset(
+                f"{temp_dir}/preprocessed_{gname}_lev_{level}_{domain[0]['lat_min']}_{domain[0]['lat_max']}_{domain[0]['lon_min']}_{domain[0]['lon_max']}.nc"
             )
-            sliced_obs[var_name] = xr.open_dataset(obs_file)[
-                var_name
-            ]  # Load the variable from the file
 
-        sliced_obs = sliced_obs.astype("float32")
-        # ------------------ Load Obs Data end ------------------
+            # ------------------ Load GCM Data end ------------------
+
+            # ------------------ Load Obs Data ------------------
+            for var_name, file_paths in file_paths_by_variable_obs.items():
+                temp_netcdf = preprocess_and_save_obs(
+                    config,
+                    domain,
+                    file_paths,
+                    temp_dir,
+                    var_name,
+                    level,
+                    startyear_h,
+                    endyear_h,
+                )
+            sliced_obs = xr.Dataset()
+            obs_domain = domain[0]
+            for var_name in variables:
+                # Construct the path to the preprocessed file for this variable
+                obs_file = os.path.join(
+                    temp_dir,
+                    f"preprocessed_obs_{var_name}_lev_{level}_{obs_domain['lat_min']}_{obs_domain['lat_max']}_{obs_domain['lon_min']}_{obs_domain['lon_max']}_{startyear_h}_{endyear_h}.nc",
+                )
+                sliced_obs[var_name] = xr.open_dataset(obs_file)[
+                    var_name
+                ]  # Load the variable from the file
+
+            sliced_obs = sliced_obs.astype("float32")
+            # ------------------ Load Obs Data end ------------------
 
         if config.bc_hist:
 
             # To store all bc_params for later concatenation
             all_bc_params = []
-            single_tile_fast_path = len(tiles) == 1
+            single_tile_fast_path = False
             single_tile_corrected = None
             single_tile_params = None
             if single_tile_fast_path:
@@ -439,7 +524,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
                     "skipping temporary tile NetCDF writes."
                 )
             # # for idx, tile in enumerate(tiles):
-            for idx, tile in enumerate(tqdm(tiles, desc="Processing tiles")):
+            for idx, tile in tqdm(tile_items, desc="Processing tiles"):
                 #     for var_name, file_paths in file_paths_by_variable_obs.items():
                 #         temp_netcdf = preprocess_and_save_obs(
                 #             tile,
@@ -467,12 +552,50 @@ def main(config_path, override_ncpus=None, override_mem=None):
                 output_file = f"{temp_dir}/bc_corrected_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
                 output_params = f"{temp_dir}/bc_params_tile_3d_{period}_lev_{level}_{idx}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}.nc"
 
-                obs_tile = sliced_obs.isel(
-                    lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
-                )
-                gcm_tile = sliced_gcm.isel(
-                    lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
-                )
+                if preprocess_scope == "tile":
+                    if os.path.exists(output_file) and os.path.exists(output_params):
+                        print(
+                            f"Both output files for tile {idx}, level {level} exist. Skipping..."
+                        )
+                        all_bc_params.append(output_params)
+                        continue
+
+                    tile_domain = [tile]
+                    temp_gcm = preprocess_and_save_gcm(
+                        config,
+                        tile_domain,
+                        file_paths_by_variable_gcm,
+                        temp_dir,
+                        level,
+                    )
+                    gcm_tile = xr.open_dataset(temp_gcm)
+
+                    for var_name, file_paths in file_paths_by_variable_obs.items():
+                        temp_netcdf = preprocess_and_save_obs(
+                            config,
+                            tile_domain,
+                            file_paths,
+                            temp_dir,
+                            var_name,
+                            level,
+                            startyear_h,
+                            endyear_h,
+                        )
+                    obs_tile = xr.Dataset()
+                    for var_name in variables:
+                        obs_file = os.path.join(
+                            temp_dir,
+                            f"preprocessed_obs_{var_name}_lev_{level}_{tile['lat_min']}_{tile['lat_max']}_{tile['lon_min']}_{tile['lon_max']}_{startyear_h}_{endyear_h}.nc",
+                        )
+                        obs_tile[var_name] = xr.open_dataset(obs_file)[var_name]
+                    obs_tile = obs_tile.astype("float32")
+                else:
+                    obs_tile = sliced_obs.isel(
+                        lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
+                    )
+                    gcm_tile = sliced_gcm.isel(
+                        lat=slice(lat_i0, lat_i1), lon=slice(lon_j0, lon_j1)
+                    )
                 # # Check if both output files already exist
                 # if os.path.exists(output_file) and os.path.exists(output_params):
                 #     print(
@@ -568,7 +691,7 @@ def main(config_path, override_ncpus=None, override_mem=None):
                     all_bc_params.append(output_params)
 
                 # Free memory after saving each tile
-                del bc_corrected_gcm_hist_tile, ds_params
+                del bc_corrected_gcm_hist_tile, ds_params, gcm_tile, obs_tile
                 # print(f"Processed and saved tile {idx}, lat range: {lat_range}, lon range: {lon_range}")
 
                 # except Exception as e:
@@ -592,6 +715,15 @@ def main(config_path, override_ncpus=None, override_mem=None):
 
             # # Concatenate all latitude bands along the latitude (axis=0)
             # full_param_array = np.concatenate(lat_band_tiles, axis=0)
+
+            if skip_merge:
+                print(
+                    f"[INFO] Skipping final merge for level {level}; "
+                    f"processed {len(tile_items)} tile(s)."
+                )
+                elapsed_time = time.time() - start_time
+                print(f"Completed tile-group processing in {elapsed_time / 60:.2f} minutes")
+                continue
 
             if single_tile_fast_path:
                 if single_tile_corrected is None or single_tile_params is None:
@@ -651,14 +783,10 @@ def main(config_path, override_ncpus=None, override_mem=None):
                     if var_name == "hus":
                         lower = lower / 1000
                         upper = upper / 1000
-                    # Apply the limits to the variable by masking values outside of the range
-                    full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
-                        (full_bc_corrected[var_name] > lower),
-                        lower,
-                    )
-                    full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
-                        (full_bc_corrected[var_name] < upper),
-                        upper,
+                    # Clip finite out-of-range values while preserving NaNs for diagnostics.
+                    full_bc_corrected[var_name] = full_bc_corrected[var_name].clip(
+                        min=lower,
+                        max=upper,
                     )
 
             full_bc_corrected["time"].attrs.update(
@@ -832,14 +960,10 @@ def main(config_path, override_ncpus=None, override_mem=None):
                     if var_name == "hus":
                         lower = lower / 1000
                         upper = upper / 1000
-                    # Apply the limits to the variable by masking values outside of the range
-                    full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
-                        (full_bc_corrected[var_name] > lower),
-                        lower,
-                    )
-                    full_bc_corrected[var_name] = full_bc_corrected[var_name].where(
-                        (full_bc_corrected[var_name] < upper),
-                        upper,
+                    # Clip finite out-of-range values while preserving NaNs for diagnostics.
+                    full_bc_corrected[var_name] = full_bc_corrected[var_name].clip(
+                        min=lower,
+                        max=upper,
                     )
 
             full_bc_corrected["time"].attrs.update(
@@ -909,9 +1033,13 @@ def main(config_path, override_ncpus=None, override_mem=None):
                     full_bc_corrected.load(),
                     f"{out_path}/bc_corrected_3d_lev_{level}_{infor}_{gname}_{period_f}_{cinfor}_{sinfor}_{startyear_f}_{endyear_f}.nc",
                 )
-        # Remove the temporary directory and its contents
-        shutil.rmtree(temp_dir)
-        print("Intermediate files deleted.")
+        # Remove temporary files only when explicitly requested. Tile-group
+        # workflows need these files for QC and later full-domain merging.
+        if getattr(config, "cleanup_bc_inputs", True):
+            shutil.rmtree(temp_dir)
+            print("Intermediate files deleted.")
+        else:
+            print(f"Intermediate files retained at {temp_dir}")
 
         # Log the time taken for this level
         end_time = time.time()

@@ -1081,10 +1081,10 @@ def convert_6hr_to_original_xr(config, bias_corrected_data_xr, g_u_xr, g_v_xr):
     bias_corrected_data_xr = bias_corrected_data_xr.transpose(
         "time", "lat", "lon"
     ).chunk({"time": 1000, "lat": -1, "lon": -1})
-    g_u_xr = g_u_xr.transpose("lat", "lon", "time").chunk(
+    g_u_xr = g_u_xr.transpose("time", "lat", "lon").chunk(
         {"time": 1000, "lat": -1, "lon": -1}
     )
-    g_v_xr = g_v_xr.transpose("lat", "lon", "time").chunk(
+    g_v_xr = g_v_xr.transpose("time", "lat", "lon").chunk(
         {"time": 1000, "lat": -1, "lon": -1}
     )
 
@@ -1123,7 +1123,7 @@ def convert_6hr_to_original_xr(config, bias_corrected_data_xr, g_u_xr, g_v_xr):
     # Combine the converted data into the final dataset
     converted_data_xr = xr.Dataset(
         {"hus": q_converted, "ta": t_converted, "ua": bcu, "va": bcv}
-    )
+    ).transpose("time", "lat", "lon")
 
     return converted_data_xr
 

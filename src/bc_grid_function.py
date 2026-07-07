@@ -207,6 +207,148 @@ def correction_wrapper(config, gcm_data, obs_data):
     return result_dict["gcmc"], result_dict["bc_params"]
 
 
+def _materialize_hist_cell_inputs(reshaped_gcm, reshaped_obs, var_names):
+    """Load one tile once and return contiguous arrays with spatial axes last."""
+    required_dims = ("year", "month", "day", "lat", "lon")
+    gcm_arrays = []
+    obs_arrays = []
+
+    for var_name in var_names:
+        if var_name not in reshaped_gcm or var_name not in reshaped_obs:
+            raise KeyError(f"Missing required bias-correction variable: {var_name}")
+
+        gcm_var = reshaped_gcm[var_name].transpose(*required_dims)
+        obs_var = reshaped_obs[var_name].transpose(*required_dims)
+        if gcm_var.shape != obs_var.shape:
+            raise ValueError(
+                f"Shape mismatch for {var_name}: "
+                f"GCM {gcm_var.shape} != reference {obs_var.shape}"
+            )
+
+        gcm_arrays.append(np.asarray(gcm_var.values, dtype=np.float32))
+        obs_arrays.append(np.asarray(obs_var.values, dtype=np.float32))
+
+    gcm_array = np.ascontiguousarray(np.stack(gcm_arrays, axis=0))
+    obs_array = np.ascontiguousarray(np.stack(obs_arrays, axis=0))
+    if not np.isfinite(gcm_array).all():
+        raise ValueError("GCM tile contains NaN or infinite values before correction.")
+    if not np.isfinite(obs_array).all():
+        raise ValueError("Reference tile contains NaN or infinite values before correction.")
+
+    return gcm_array, obs_array
+
+
+def _correct_hist_cell_numpy(config, lat_index, lon_index, gcm_cell, obs_cell):
+    """Correct one complete grid-cell history using isolated NumPy inputs."""
+    gcm_cell = np.ascontiguousarray(gcm_cell, dtype=np.float32)
+    obs_cell = np.ascontiguousarray(obs_cell, dtype=np.float32)
+    if gcm_cell.ndim != 4 or obs_cell.ndim != 4:
+        raise ValueError(
+            "Fortran cell inputs must have shape (variable, year, month, day)."
+        )
+    if gcm_cell.shape != obs_cell.shape:
+        raise ValueError(
+            f"Cell input shape mismatch: GCM {gcm_cell.shape} != "
+            f"reference {obs_cell.shape}"
+        )
+    if not np.isfinite(gcm_cell).all() or not np.isfinite(obs_cell).all():
+        raise ValueError(
+            f"Non-finite cell input at lat index {lat_index}, lon index {lon_index}."
+        )
+
+    corrected, bc_params = correction_wrapper(config, gcm_cell, obs_cell)
+    corrected = np.asarray(corrected)
+    if corrected.shape != gcm_cell.shape:
+        raise ValueError(
+            f"Unexpected corrected shape at lat index {lat_index}, "
+            f"lon index {lon_index}: {corrected.shape} != {gcm_cell.shape}"
+        )
+    if not np.isfinite(corrected).all():
+        raise FloatingPointError(
+            f"Non-finite corrected values at lat index {lat_index}, "
+            f"lon index {lon_index}."
+        )
+
+    return lat_index, lon_index, corrected, bc_params
+
+
+def _correct_hist_grid_cells(config, reshaped_gcm, reshaped_obs, var_names):
+    """
+    Correct a tile in bounded horizontal batches.
+
+    The complete time history remains intact in every task. Only the horizontal
+    cell dimension is partitioned, so each native call receives an array shaped
+    (variable, year, month, day).
+    """
+    gcm_array, obs_array = _materialize_hist_cell_inputs(
+        reshaped_gcm, reshaped_obs, var_names
+    )
+    _, n_year, n_month, n_day, n_lat, n_lon = gcm_array.shape
+    output_shape = (n_year, n_month, n_day, n_lat, n_lon)
+    corrected_data = {
+        var_name: np.full(output_shape, np.nan, dtype=np.float32)
+        for var_name in var_names
+    }
+    bc_params_array = np.full((n_lat, n_lon), None, dtype=object)
+
+    cells = list(itertools.product(range(n_lat), range(n_lon)))
+    batch_size = max(1, int(getattr(config, "dask_cell_batch_size", 32)))
+    for batch_start in range(0, len(cells), batch_size):
+        batch = cells[batch_start : batch_start + batch_size]
+        tasks = []
+        for lat_index, lon_index in batch:
+            # Copies are deliberate: workers receive only this cell, never the
+            # complete xarray tile or a lazy graph referencing it.
+            gcm_cell = np.ascontiguousarray(
+                gcm_array[:, :, :, :, lat_index, lon_index]
+            )
+            obs_cell = np.ascontiguousarray(
+                obs_array[:, :, :, :, lat_index, lon_index]
+            )
+            tasks.append(
+                dask.delayed(_correct_hist_cell_numpy, pure=False)(
+                    config,
+                    lat_index,
+                    lon_index,
+                    gcm_cell,
+                    obs_cell,
+                )
+            )
+
+        for lat_index, lon_index, corrected, bc_params in dask.compute(*tasks):
+            for var_index, var_name in enumerate(var_names):
+                corrected_data[var_name][:, :, :, lat_index, lon_index] = corrected[
+                    var_index
+                ]
+            bc_params_array[lat_index, lon_index] = bc_params.to_dict()
+
+    if any(param is None for param in bc_params_array.flat):
+        raise RuntimeError("Bias correction did not return parameters for every grid cell.")
+    for var_name, values in corrected_data.items():
+        if not np.isfinite(values).all():
+            raise FloatingPointError(
+                f"Bias correction left non-finite values in {var_name}."
+            )
+
+    corrected_ds = xr.Dataset(
+        {
+            var_name: (
+                ["year", "month", "day", "lat", "lon"],
+                corrected_data[var_name],
+            )
+            for var_name in var_names
+        },
+        coords={
+            "year": reshaped_gcm.year,
+            "month": reshaped_gcm.month,
+            "day": reshaped_gcm.day,
+            "lat": reshaped_gcm.lat,
+            "lon": reshaped_gcm.lon,
+        },
+    )
+    return corrected_ds, bc_params_array
+
+
 def correction_wrapper_future(config, gcm_data, bc_params_array):
     """
     Wrapper function to apply bias correction for future GCM data.
@@ -1124,7 +1266,10 @@ def preprocess_and_save_gcm(
                 data_var = data_var[var_name]
             sliced_gcm[var_name] = data_var
 
-        sliced_gcm_sel = sliced_gcm.astype(np.float32).persist()
+        if str(getattr(config, "preprocess_scope", "domain")).lower() == "tile":
+            sliced_gcm_sel = sliced_gcm.astype(np.float32).load()
+        else:
+            sliced_gcm_sel = sliced_gcm.astype(np.float32).persist()
         lock = Lock(name=temp_file)  # one-writer-per-path
         with lock:
             # Double-check if the file was created while waiting for the lock
@@ -1177,38 +1322,33 @@ def preprocess_and_save_obs(
 
     if not os.path.exists(temp_file):
         # Preprocess the observational data
-        obs_ds = xr.open_mfdataset(
-            file_paths,
-            combine="by_coords",
-            chunks={"time": "auto", "lat": "auto", "lon": "auto"},
-        )
-        # Apply nearest logic to longitude
-        # lon_values = obs_ds.lon.values
-        # lat_values = obs_ds.lat.values
-        # nearest_lat_min = lat_values[np.abs(lat_values - lat_range[0]).argmin()]
-        # nearest_lat_max = lat_values[np.abs(latValues - lat_range[1]).argmin()]
-        # nearest_lon_min = lon_values[np.abs(lon_values - lon_range[0]).argmin()]
-        # nearest_lon_max = lon_values[np.abs(lon_values - lon_range[1]).argmin()]
-
-        # obs_ds_sel = (
-        #     obs_ds[var_name]
-        #     .isel(lev=level_index)
-        #     .sel(
-        #         lat=slice(nearest_lat_min, nearest_lat_max),
-        #         lon=slice(nearest_lon_min, nearest_lon_max),
-        #         time=slice(f"{startyear_h}-01-01", f"{endyear_h}-12-31"),
-        #     )
-        # )
-        obs_ds_sel = (
-            obs_ds[var_name]
-            .isel(lev=level_index)
-            .sel(
-                lat=slice(*lat_range),
-                lon=slice(*lon_range),
-                time=slice(f"{startyear_h}-01-01", f"{endyear_h}-12-31"),
+        if str(getattr(config, "preprocess_scope", "domain")).lower() == "tile":
+            obs_ds_sel = load_preprocess_variable(
+                config,
+                file_paths,
+                var_name,
+                level_index,
+                lat_range,
+                lon_range,
+                startyear_h,
+                endyear_h,
             )
-        )
-        obs_ds_sel = obs_ds_sel.astype("float32").persist()
+        else:
+            obs_ds = xr.open_mfdataset(
+                file_paths,
+                combine="by_coords",
+                chunks={"time": "auto", "lat": "auto", "lon": "auto"},
+            )
+            obs_ds_sel = (
+                obs_ds[var_name]
+                .isel(lev=level_index)
+                .sel(
+                    lat=slice(*lat_range),
+                    lon=slice(*lon_range),
+                    time=slice(f"{startyear_h}-01-01", f"{endyear_h}-12-31"),
+                )
+            )
+            obs_ds_sel = obs_ds_sel.astype("float32").persist()
         # Use a lock to ensure only one process writes to the file at a time
         lock = Lock(name=temp_file)  # one-writer-per-path
         with lock:
@@ -1268,6 +1408,49 @@ def preprocess_dataset(
         )
 
 
+def _load_preprocess_variable_serial(
+    config,
+    file_paths,
+    var_name,
+    level_index,
+    lat_range,
+    lon_range,
+    startyear_h,
+    endyear_h,
+):
+    """Load one tile with serial NetCDF I/O, avoiding Dask worker HDF5 access."""
+    arrays = []
+    for file_path in file_paths:
+        with xr.open_dataset(file_path, chunks=None) as ds:
+            data = preprocess_dataset(
+                config,
+                ds,
+                var_name,
+                level_index,
+                lat_range,
+                lon_range,
+                startyear_h,
+                endyear_h,
+                config.bc_boundary,
+            )
+            if data.sizes.get("time", 1) == 0:
+                continue
+            arrays.append(data.astype("float32").load())
+
+    if not arrays:
+        raise ValueError(
+            f"No data found for {var_name} in lat={lat_range}, lon={lon_range}, "
+            f"years={startyear_h}-{endyear_h}."
+        )
+    if len(arrays) == 1:
+        combined = arrays[0]
+    else:
+        combined = xr.concat(arrays, dim="time")
+    if "time" in combined.coords:
+        combined = combined.sortby("time")
+    return combined
+
+
 def load_preprocess_variable(
     config,
     file_paths,
@@ -1293,6 +1476,18 @@ def load_preprocess_variable(
     Returns:
         xarray.DataArray: Preprocessed dataset for the variable.
     """
+
+    if str(getattr(config, "preprocess_scope", "domain")).lower() == "tile":
+        return _load_preprocess_variable_serial(
+            config,
+            file_paths,
+            var_name,
+            level_index,
+            lat_range,
+            lon_range,
+            startyear_h,
+            endyear_h,
+        )
 
     ds_sel = xr.open_mfdataset(
         file_paths,
@@ -1442,65 +1637,12 @@ def bc_correction_grid_cell_hist_dask(
     - ds_corrected: Xarray Dataset with corrected data and bias correction parameters
     """
 
-    # # Generate tasks for each grid cell
-    tasks = [
-        dask.delayed(process_grid_cell)(config, lat, lon, reshaped_gcm, reshaped_obs)
-        for lat, lon in itertools.product(
-            reshaped_gcm.lat.values, reshaped_gcm.lon.values
-        )
-    ]
-
-    # grid_cells = list(
-    #     itertools.product(reshaped_gcm.lat.values, reshaped_gcm.lon.values)
-    # )
-    # batch_size = 1  # Process 20 grid cells at a time
-    # tasks = [
-    #     dask.delayed(process_batch_of_grid_cells)(
-    #         grid_cells[i : i + batch_size], reshaped_gcm, reshaped_obs
-    #     )
-    #     for i in range(0, len(grid_cells), batch_size)
-    # ]
-
-    # Compute all tasks in parallel at the end
-    results = dask.compute(*tasks)
-
-    # Flatten the list of results
-    flattened_results = [item for sublist in results for item in sublist]
-
-    # Initialize arrays to hold the final data
-    corrected_data = {
-        var: np.empty((31, 12, 31, len(reshaped_gcm.lat), len(reshaped_gcm.lon)))
-        for var in var_list_w
-    }
-    bc_params_array = np.empty(
-        (len(reshaped_gcm.lat), len(reshaped_gcm.lon)), dtype=object
+    gcmc_corrected, bc_params_array = _correct_hist_grid_cells(
+        config,
+        reshaped_gcm,
+        reshaped_obs,
+        var_list_w,
     )
-
-    # Fill the arrays with data from results
-    for result in results:
-        lat_idx = np.where(reshaped_gcm.lat.values == result["lat"])[0][0]
-        lon_idx = np.where(reshaped_gcm.lon.values == result["lon"])[0][0]
-        for i, var in enumerate(var_list_w):
-            corrected_data[var][:, :, :, lat_idx, lon_idx] = result["gcmc_corrected"][i]
-        bc_params_array[lat_idx, lon_idx] = result["bc_params"].to_dict()
-
-    # Convert to Xarray Dataset
-    gcmc_corrected = xr.Dataset(
-        {
-            var: (["year", "month", "day", "lat", "lon"], corrected_data[var])
-            for var in var_list_w
-        },
-        coords={
-            "year": reshaped_gcm.year,
-            "month": reshaped_gcm.month,
-            "day": reshaped_gcm.day,
-            "lat": reshaped_gcm.lat,
-            "lon": reshaped_gcm.lon,
-        },
-    )
-    # gcmc_corrected, bc_params_array = bc_correction_grid_cell_multiprocess(
-    #     config, reshaped_gcm, reshaped_obs, var_list_w
-    # )
     six_hourly_data_hist = rescale_and_reformat(config, gcmc_corrected, ff_gcm, ff_obs)
 
     bc_corrected_6hourly_data = apply_boundary_correction(

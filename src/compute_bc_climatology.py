@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 import glob
+import re
 
 import numpy as np
 import xarray as xr
@@ -99,6 +100,27 @@ def _extract_years_from_name(input_path: str) -> tuple[int | None, int | None]:
     if len(years) >= 2:
         return years[-2], years[-1]
     return None, None
+
+
+def _extract_level_from_name(input_path: str) -> int | None:
+    match = re.search(r"(?:^|_)lev_(\d+)(?:_|$)", Path(input_path).stem)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _reference_level_index(config: SimpleNamespace, bc_input_path: str) -> int:
+    filename_level = _extract_level_from_name(bc_input_path)
+    config_level = int(getattr(config, "slevel", 0))
+    if filename_level is not None:
+        if filename_level != config_level:
+            logger.warning(
+                "Using level %s inferred from input filename; config slevel is %s.",
+                filename_level,
+                config_level,
+            )
+        return filename_level
+    return config_level
 
 
 def _collect_reference_files(
@@ -367,7 +389,7 @@ def main() -> None:
         logger.info("Locating reference files from config: %s", args.config)
         cfg = _read_config(args.config)
         single_grid_test = bool(getattr(cfg, "single_grid_test", False))
-        level_index = int(getattr(cfg, "slevel", 0))
+        level_index = _reference_level_index(cfg, args.input)
         ref_files = _collect_reference_files(cfg, args.input)
         logger.info("Found %d reference files", len(ref_files))
         ds_ref = xr.open_mfdataset(

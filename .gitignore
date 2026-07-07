@@ -1,4 +1,3 @@
-/tests/
 docs/_build/
 src/generated_level_configs/
 *.pbs*
