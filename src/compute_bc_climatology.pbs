@@ -1,0 +1,55 @@
+#!/bin/bash
+#PBS -P n81
+#PBS -q normal
+#PBS -j oe
+#PBS -l wd
+#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/xp65+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
+
+set -eu
+
+INPUT_PATH=${INPUT_PATH:?INPUT_PATH is required}
+CONFIG_PATH=${CONFIG_PATH:-}
+OUTPUT_PATH=${OUTPUT_PATH:-}
+OUTDIR_PATH=${OUTDIR_PATH:-}
+BIAS_OUTPUT_PATH=${BIAS_OUTPUT_PATH:-}
+REFERENCE_INPUT_PATH=${REFERENCE_INPUT_PATH:-}
+CHUNKS=${CHUNKS:-}
+MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3-26.02}
+SCRIPT_PATH=${SCRIPT_PATH:-compute_bc_climatology.py}
+NO_BIAS=${NO_BIAS:-0}
+NO_MONTHLY=${NO_MONTHLY:-0}
+DAILY=${DAILY:-0}
+NO_SEASONAL=${NO_SEASONAL:-0}
+NO_STD=${NO_STD:-0}
+STD_MONTHLY_MEANS=${STD_MONTHLY_MEANS:-0}
+STD_SEASONAL_MEANS=${STD_SEASONAL_MEANS:-0}
+STD_ANNUAL_MEANS=${STD_ANNUAL_MEANS:-0}
+
+printf 'Starting time: '
+date
+
+module use /g/data/xp65/public/modules
+module load "conda/${MODULE_ANALYSIS}"
+
+printf 'Starting BC climatology compute for %s\n' "$INPUT_PATH"
+
+ARGS=("$INPUT_PATH")
+if [ -n "$OUTPUT_PATH" ]; then ARGS+=(-o "$OUTPUT_PATH"); fi
+if [ -n "$OUTDIR_PATH" ]; then ARGS+=(--outdir "$OUTDIR_PATH"); fi
+if [ -n "$CONFIG_PATH" ]; then ARGS+=(--config "$CONFIG_PATH"); fi
+if [ -n "$REFERENCE_INPUT_PATH" ]; then ARGS+=(--reference-input "$REFERENCE_INPUT_PATH"); fi
+if [ -n "$BIAS_OUTPUT_PATH" ]; then ARGS+=(--bias-output "$BIAS_OUTPUT_PATH"); fi
+if [ -n "$CHUNKS" ]; then ARGS+=(--chunks "$CHUNKS"); fi
+if [ "$NO_BIAS" = "1" ]; then ARGS+=(--no-bias); fi
+if [ "$NO_MONTHLY" = "1" ]; then ARGS+=(--no-monthly); fi
+if [ "$DAILY" = "1" ]; then ARGS+=(--daily); fi
+if [ "$NO_SEASONAL" = "1" ]; then ARGS+=(--no-seasonal); fi
+if [ "$NO_STD" = "1" ]; then ARGS+=(--no-std); fi
+if [ "$STD_MONTHLY_MEANS" = "1" ]; then ARGS+=(--std-monthly-means); fi
+if [ "$STD_SEASONAL_MEANS" = "1" ]; then ARGS+=(--std-seasonal-means); fi
+if [ "$STD_ANNUAL_MEANS" = "1" ]; then ARGS+=(--std-annual-means); fi
+
+python "$SCRIPT_PATH" "${ARGS[@]}"
+
+printf 'Ending time: '
+date

@@ -61,6 +61,26 @@ Generated per-level configs default to:
 
 Override with `GENERATED_CONFIG_DIR=/path/to/dir` if needed.
 
+Submit one PBS array job covering all tile groups for a single config (the
+only numerically validated way to scale BC throughput -- see
+`runbooks/BC_RUNBOOK.md#scaling-up-with-pbs-tile-groups`):
+
+```bash
+DRY_RUN=1 ./submit_bc_3d_tile_groups.sh \
+  config_bc_3d_ecearth3veg_to_access_hist_tile_l20.yaml \
+  140 5 bc_l20_group
+```
+
+## Reformat
+
+Reconstruct BC output back into the target GCM's original NetCDF structure,
+chained after a BC job:
+
+```bash
+JOB_DEPENDENCY_OVERRIDE=afterok:<bc_job_id> \
+./submit_reformat.sh config_bc_3d_ecearth3veg_to_access_hist_tile_l20.yaml bc_l20_reformat
+```
+
 ## Climatology And Plots
 
 Use these only after BC outputs are verified.

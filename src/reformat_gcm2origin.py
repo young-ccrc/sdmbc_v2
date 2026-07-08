@@ -918,7 +918,7 @@ def reformat_and_save_2d(config, input_path, original_file, output_file, remap_w
 
 
 # ---------------------------------------------------------------------------------------------------
-def main(config_path, var_interp, override_ncpus=None, override_mem=None):
+def main(config_path, override_ncpus=None, override_mem=None):
     """
     Main function to initiate the reformatting process for bias-corrected GCM data.
 
@@ -950,7 +950,6 @@ def main(config_path, var_interp, override_ncpus=None, override_mem=None):
     # Start Dask client
     client = setup_client(ncpus, mem_gb)
 
-    # print("[INFO] Starting interpolation for variable:", var_interp)
     print(f"[INFO] CMIP6 root: {cfg['target_path']} (table={cfg['gname']})")
 
     # Inputs from YAML
@@ -1035,4 +1034,4 @@ if __name__ == "__main__":
     parser.add_argument("--mem", type=int, default=None, help="Override memory in GB")
 
     args = parser.parse_args()
-    main(args.yp, args.var, args.ncpus, args.mem)
+    main(args.yp, args.ncpus, args.mem)

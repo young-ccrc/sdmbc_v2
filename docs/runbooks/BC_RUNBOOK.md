@@ -286,6 +286,41 @@ Next steps:
 5. Confirm future correction can use the saved historical BC parameters.
 6. Remove interpolated historical NetCDF intermediates only after BC outputs are verified.
 
+## Scaling Up With PBS Tile Groups
+
+Only 1 Dask worker x 1 thread is numerically validated for BC (see
+`TROUBLESHOOTING_BC_MODEL_AS_TRUTH.md`); every multi-worker attempt tested so
+far has silently corrupted output. Throughput therefore comes from
+PBS-level parallelism across tile groups, not from raising
+`DASK_N_WORKERS`/`DASK_THREADS_PER_WORKER`.
+
+`submit_bc_3d_tile_groups.sh` submits one PBS job array covering all tile
+groups for a config, with each array task processing a disjoint tile range
+at 1 worker x 1 thread:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+./submit_bc_3d_tile_groups.sh \
+  config_bc_3d_ecearth3veg_to_access_hist_tile_l20.yaml \
+  140 5 bc_l20_group
+```
+
+The first argument after the config is `total_tiles`, which must be known
+ahead of submission -- check a prior run's log for the line
+`[INFO] processing X of Y tiles`, where `Y` is `total_tiles`. The second is
+`group_size` (tiles per array task); pick it relative to `max_tile_size` in
+the config, trading off array-task count against per-task memory/walltime.
+
+Dry-run first to sanity-check the array size:
+
+```bash
+DRY_RUN=1 ./submit_bc_3d_tile_groups.sh \
+  config_bc_3d_ecearth3veg_to_access_hist_tile_l20.yaml 140 5 bc_l20_group
+```
+
+Only the array task covering the final tile group attempts to merge tile
+outputs; earlier tasks run with `SDMBC_SKIP_MERGE=true` automatically.
+
 ## If The One-Grid Test Fails
 
 Common failure classes:
@@ -321,6 +356,21 @@ Delete interpolated historical files only after:
 - future correction does not need to reread the historical interpolation files
 
 Future interpolation should be delayed until historical BC is proven.
+
+## Reformatting Bias-Corrected Output
+
+After BC output is verified, `reformat_gcm2origin.py` reconstructs it back
+into the target GCM's original NetCDF/CMIP6 structure. Submit it chained
+`afterok` the BC job so it only runs once BC succeeds:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+JOB_DEPENDENCY_OVERRIDE=afterok:<bc_job_id> \
+./submit_reformat.sh config_bc_3d_ecearth3veg_to_access_hist_tile_l20.yaml bc_l20_reformat
+```
+
+Omit `JOB_DEPENDENCY_OVERRIDE` to run it standalone against already-verified
+BC output.
 
 ## Climatology And Bias Maps
 

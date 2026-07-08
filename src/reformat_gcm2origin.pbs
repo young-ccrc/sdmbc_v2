@@ -1,0 +1,27 @@
+#!/bin/bash
+#PBS -P n81
+#PBS -q normal
+#PBS -j oe
+#PBS -l wd
+#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/xp65+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
+
+set -eu
+
+CONFIG=${CONFIG:?CONFIG is required}
+NCPUS=${NCPUS:-8}
+MEM_GB=${MEM_GB:-64}
+MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3-26.02}
+SCRIPT_PATH=${SCRIPT_PATH:-reformat_gcm2origin.py}
+
+printf 'Starting time: '
+date
+
+module use /g/data/xp65/public/modules
+module load "conda/${MODULE_ANALYSIS}"
+
+printf 'Starting reformat using %s\n' "$CONFIG"
+
+python "$SCRIPT_PATH" --yp "$CONFIG" --ncpus "$NCPUS" --mem "$MEM_GB"
+
+printf 'Ending time: '
+date

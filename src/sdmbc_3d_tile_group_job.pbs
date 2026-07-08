@@ -1,0 +1,57 @@
+#!/bin/bash
+#PBS -P n81
+#PBS -q normal
+#PBS -j oe
+#PBS -l wd
+#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/xp65+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
+
+set -eu
+
+CONFIG=${CONFIG:?CONFIG is required}
+GROUP_SIZE=${GROUP_SIZE:?GROUP_SIZE is required}
+TOTAL_TILES=${TOTAL_TILES:?TOTAL_TILES is required}
+NCPUS=${NCPUS:-8}
+MEM_GB=${MEM_GB:-64}
+MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3-26.02}
+SCRIPT_PATH=${SCRIPT_PATH:-sdmbc_main_3d.py}
+
+# Only 1 worker x 1 thread is numerically validated for BC (see
+# TROUBLESHOOTING_BC_MODEL_AS_TRUTH.md). Throughput here comes from PBS-level
+# fan-out across array tasks, not intra-job Dask parallelism, so this is
+# forced regardless of NCPUS rather than left to setup_client()'s default
+# (which would otherwise pick DASK_N_WORKERS = NCPUS).
+DASK_N_WORKERS=${DASK_N_WORKERS:-1}
+DASK_THREADS_PER_WORKER=${DASK_THREADS_PER_WORKER:-1}
+DASK_PROCESSES=${DASK_PROCESSES:-true}
+
+PBS_ARRAY_INDEX=${PBS_ARRAY_INDEX:?PBS_ARRAY_INDEX is required (submit via qsub -J)}
+
+SDMBC_TILE_START=$((PBS_ARRAY_INDEX * GROUP_SIZE))
+SDMBC_TILE_END=$((SDMBC_TILE_START + GROUP_SIZE))
+if [ "$SDMBC_TILE_END" -gt "$TOTAL_TILES" ]; then
+    SDMBC_TILE_END=$TOTAL_TILES
+fi
+export SDMBC_TILE_START SDMBC_TILE_END
+
+# Each array task owns a disjoint tile range; only one task (the one that
+# reaches the final tile group) should attempt to merge tile outputs.
+if [ "$SDMBC_TILE_END" -ge "$TOTAL_TILES" ]; then
+    SDMBC_SKIP_MERGE=${SDMBC_SKIP_MERGE:-false}
+else
+    SDMBC_SKIP_MERGE=true
+fi
+export SDMBC_SKIP_MERGE
+
+printf 'Starting time: '
+date
+
+module use /g/data/xp65/public/modules
+module load "conda/${MODULE_ANALYSIS}"
+
+printf 'Starting 3D bias correction for tile group %s (tiles [%s, %s)) using %s\n' \
+    "$PBS_ARRAY_INDEX" "$SDMBC_TILE_START" "$SDMBC_TILE_END" "$CONFIG"
+
+python "$SCRIPT_PATH" --yp "$CONFIG" --ncpus "$NCPUS" --mem "$MEM_GB"
+
+printf 'Ending time: '
+date

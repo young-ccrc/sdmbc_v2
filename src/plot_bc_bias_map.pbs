@@ -1,0 +1,35 @@
+#!/bin/bash
+#PBS -P n81
+#PBS -q normal
+#PBS -j oe
+#PBS -l wd
+#PBS -l storage=scratch/n81+scratch/w28+scratch/dm6+gdata/w28+gdata/xp65+gdata/oi10+gdata/dm6+gdata/rt52+gdata/n81+gdata/fs38
+
+set -eu
+
+INPUT_PATH=${INPUT_PATH:?INPUT_PATH is required}
+OUTDIR_PATH=${OUTDIR_PATH:-}
+PATTERN_VALUE=${PATTERN_VALUE:-}
+FACET_DIM_VALUE=${FACET_DIM_VALUE:-}
+CMAP_VALUE=${CMAP_VALUE:-RdBu_r}
+MODULE_ANALYSIS=${MODULE_ANALYSIS:-analysis3-26.02}
+SCRIPT_PATH=${SCRIPT_PATH:-plot_bc_bias_map.py}
+
+printf 'Starting time: '
+date
+
+module use /g/data/xp65/public/modules
+module load "conda/${MODULE_ANALYSIS}"
+
+printf 'Starting bias-map plotting for %s\n' "$INPUT_PATH"
+
+ARGS=("$INPUT_PATH")
+if [ -n "$OUTDIR_PATH" ]; then ARGS+=(-o "$OUTDIR_PATH"); fi
+if [ -n "$PATTERN_VALUE" ]; then ARGS+=(--pattern "$PATTERN_VALUE"); fi
+if [ -n "$FACET_DIM_VALUE" ]; then ARGS+=(--facet-dim "$FACET_DIM_VALUE"); fi
+if [ -n "$CMAP_VALUE" ]; then ARGS+=(--cmap "$CMAP_VALUE"); fi
+
+python "$SCRIPT_PATH" "${ARGS[@]}"
+
+printf 'Ending time: '
+date
