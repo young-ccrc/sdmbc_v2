@@ -101,5 +101,50 @@ class GridCellExecutionTests(unittest.TestCase):
             )
 
 
+class GridCellMultiWorkerDispatchTests(unittest.TestCase):
+    """Guards the dispatch/aggregation logic under a real multi-worker Client.
+
+    correction_wrapper is mocked (as in GridCellExecutionTests above) so this
+    stays fast and does not require the real Fortran extension -- it does NOT
+    reproduce the documented multi-worker corruption bug (that requires the
+    real Fortran call; see experiments/bc_multiprocess_benchmark.py for the
+    actual investigation). This only checks that dispatching the same work
+    across 1 vs 2 real distributed workers still produces identical output,
+    which would catch a regression in the dispatch/aggregation code itself.
+    """
+
+    def setUp(self):
+        shape = (3, 2, 2, 3, 2, 2)
+        self.gcm_values = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+        self.obs_values = self.gcm_values + 10.0
+        self.config = SimpleNamespace(dask_cell_batch_size=2)
+
+    def _run_with_client(self, n_workers):
+        from dask.distributed import Client
+
+        def fake_correction(config, gcm_cell, obs_cell):
+            return gcm_cell + obs_cell, FakeParams(float(gcm_cell[0, 0, 0, 0]))
+
+        client = Client(n_workers=n_workers, threads_per_worker=1, processes=True)
+        try:
+            with patch.object(bc_grid_function, "correction_wrapper", side_effect=fake_correction):
+                return bc_grid_function._correct_hist_grid_cells(
+                    self.config,
+                    make_dataset(self.gcm_values),
+                    make_dataset(self.obs_values),
+                    ["w", "ta", "hus"],
+                )
+        finally:
+            client.close()
+
+    def test_one_vs_two_worker_dispatch_agree_with_mocked_correction(self):
+        corrected_1, params_1 = self._run_with_client(1)
+        corrected_2, params_2 = self._run_with_client(2)
+
+        for name in ("w", "ta", "hus"):
+            np.testing.assert_array_equal(corrected_1[name].values, corrected_2[name].values)
+        self.assertEqual(list(params_1.flat), list(params_2.flat))
+
+
 if __name__ == "__main__":
     unittest.main()

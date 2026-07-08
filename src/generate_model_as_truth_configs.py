@@ -2,107 +2,19 @@
 """Generate model-as-truth interpolation configs targeting ACCESS-ESM1-5."""
 
 from pathlib import Path
+
 import yaml
 
-ROOT = Path(__file__).resolve().parent
-OUTPUT_ROOT = Path('/g/data/w28/yk8692/input/model_as_truth')
-UKESM_STAGE_ROOT = Path('/g/data/w28/yk8692/input/model_as_truth/ukesm1_0_ll_6hrlev_stage')
-UKESM_STAGE_VERSION = 'v20260401'
-
-TARGET = {
-    'historical': {
-        'target_path': '/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1',
-        'target_path_sst': '/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1',
-        'target_g_path': None,
-        'target_orog_path': '/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1',
-        'infor': '6hrLev',
-        'gname': 'ACCESS-ESM1-5',
-        'period': 'historical',
-        'cinfor': 'r6i1p1f1',
-        'sinfor': 'gn',
-        'version': 'v20200529',
-    },
-    'ssp126': {
-        'target_path': '/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp126/r6i1p1f1',
-        'target_path_sst': '/g/data/fs38/publications/CMIP6/ScenarioMIP/CSIRO/ACCESS-ESM1-5/ssp126/r6i1p1f1',
-        'target_g_path': None,
-        'target_orog_path': '/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1',
-        'infor': '6hrLev',
-        'gname': 'ACCESS-ESM1-5',
-        'period': 'ssp126',
-        'cinfor': 'r6i1p1f1',
-        'sinfor': 'gn',
-        'version': 'v20200529',
-        'future': {
-            'hist_target_path': '/g/data/fs38/publications/CMIP6/CMIP/CSIRO/ACCESS-ESM1-5/historical/r6i1p1f1',
-        },
-    },
-}
-
-MODELS = {
-    'EC-Earth3-Veg': {
-        'label': 'ecearth3veg',
-        'member_hist': 'r1i1p1f1',
-        'member_future': 'r1i1p1f1',
-        'three_d': {
-            'hist_root': '/g/data/oi10/replicas/CMIP6/CMIP/EC-Earth-Consortium/EC-Earth3-Veg/historical/r1i1p1f1',
-            'future_root': '/g/data/oi10/replicas/CMIP6/ScenarioMIP/EC-Earth-Consortium/EC-Earth3-Veg/ssp126/r1i1p1f1',
-            'sinfor': 'gr',
-            'version_hist': 'v20210601',
-            'version_future': 'v20210601',
-        },
-        'surface': {
-            'hist_root': '/g/data/oi10/replicas/CMIP6/CMIP/EC-Earth-Consortium/EC-Earth3-Veg/historical/r1i1p1f1',
-            'future_root': '/g/data/oi10/replicas/CMIP6/ScenarioMIP/EC-Earth-Consortium/EC-Earth3-Veg/ssp126/r1i1p1f1',
-            'sinfor': 'gn',
-            'version_hist': 'v20211207',
-            'version_future': 'v20200919',
-        },
-    },
-    'MPI-ESM1-2-HR': {
-        'label': 'mpi_esm1_2_hr',
-        'member_hist': 'r1i1p1f1',
-        'member_future': 'r1i1p1f1',
-        'three_d': {
-            'hist_root': '/g/data/oi10/replicas/CMIP6/CMIP/MPI-M/MPI-ESM1-2-HR/historical/r1i1p1f1',
-            'future_root': '/g/data/oi10/replicas/CMIP6/ScenarioMIP/DKRZ/MPI-ESM1-2-HR/ssp126/r1i1p1f1',
-            'sinfor': 'gn',
-            'version_hist': 'v20190710',
-            'version_future': 'v20190710',
-        },
-        'surface': {
-            'hist_root': '/g/data/oi10/replicas/CMIP6/CMIP/MPI-M/MPI-ESM1-2-HR/historical/r1i1p1f1',
-            'future_root': '/g/data/oi10/replicas/CMIP6/ScenarioMIP/DKRZ/MPI-ESM1-2-HR/ssp126/r1i1p1f1',
-            'sinfor': 'gn',
-            'version_hist': 'v20190710',
-            'version_future': 'v20190710',
-        },
-    },
-    'UKESM1-0-LL': {
-        'label': 'ukesm1_0_ll',
-        'member_hist': 'r1i1p1f2',
-        'member_future': 'r1i1p1f2',
-        'three_d': {
-            'hist_root': str(UKESM_STAGE_ROOT / 'historical' / 'r1i1p1f2'),
-            'future_root': str(UKESM_STAGE_ROOT / 'ssp126' / 'r1i1p1f2'),
-            'sinfor': 'gn',
-            'version_hist': UKESM_STAGE_VERSION,
-            'version_future': UKESM_STAGE_VERSION,
-        },
-        'surface': {
-            'hist_root': '/g/data/oi10/replicas/CMIP6/CMIP/MOHC/UKESM1-0-LL/historical/r1i1p1f2',
-            'future_root': '/g/data/oi10/replicas/CMIP6/ScenarioMIP/MOHC/UKESM1-0-LL/ssp126/r1i1p1f2',
-            'sinfor': 'gn',
-            'version_hist': 'v20190627',
-            'version_future': 'v20190726',
-        },
-    },
-}
-
-HIST_PERIOD = {'startyear_h': 1984, 'endyear_h': 2014}
-FUTURE_PERIOD = {'startyear_h': 2080, 'endyear_h': 2100}
-DOMAIN = {'lat_min': -90, 'lat_max': 90, 'lon_min': 0, 'lon_max': 360}
-RESOURCES = {'ncpus': 48, 'mem_gb': 190}
+from model_as_truth_registry import (
+    DOMAIN,
+    FUTURE_PERIOD,
+    HIST_PERIOD,
+    MODELS,
+    OUTPUT_ROOT,
+    ROOT,
+    RESOURCES,
+    TARGET,
+)
 
 
 def write_yaml(path: Path, data: dict) -> None:

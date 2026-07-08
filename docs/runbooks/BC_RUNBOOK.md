@@ -108,6 +108,42 @@ bc_hist: true
 bc_future: false
 ```
 
+## Scaling Model-As-Truth To Multiple Truth GCMs
+
+Three truth GCMs are supported: EC-Earth3-Veg, MPI-ESM1-2-HR, and
+UKESM1-0-LL, each bias-corrected onto ACCESS-ESM1-5 for both historical and
+future (`ssp126_2080_2100`) periods -- 6 experiments. Their shared metadata
+(paths, members, versions) lives in `src/model_as_truth_registry.py`, used by
+both `generate_model_as_truth_configs.py` (interpolation configs) and
+`generate_bc_model_as_truth_configs.py` (BC configs), so the two stay in
+sync.
+
+Generate all 6 base BC configs:
+
+```bash
+cd /g/data/w28/yk8692/sdmbc_v2/src
+python3 generate_bc_model_as_truth_configs.py --dry-run   # sanity check counts first
+python3 generate_bc_model_as_truth_configs.py
+```
+
+Each generated `config_bc_3d_<label>_to_access_<period>_model_as_truth.yaml`
+is a whole-domain, single-level base config -- fan it out per vertical level
+with `generate_bc_level_configs.py --base-config ...` as usual before
+submitting.
+
+**UKESM1-0-LL asymmetry:** unlike the other two truth GCMs, UKESM's 3D
+6hrLev input isn't available in a CMIP6-DRS-compatible layout directly under
+`/g/data`, so it must be staged first via `stage_ukesm_3d_to_gadi.sh`
+(`PERIOD=historical` or `PERIOD=ssp126`). `submit_model_as_truth_hist.sh` and
+`submit_model_as_truth_future.sh` call
+`model_as_truth_registry.check_3d_model_staged(...)` before submitting
+UKESM's 3D interpolation jobs, so a missing staging step fails fast with a
+clear message instead of deep inside the interpolation pipeline.
+
+CNRM and ERA5 configs under `src/` are legacy/hand-written, schema-drifted
+from the generator, and out of scope for this 3-GCM model-as-truth set --
+don't assume they're generator-managed.
+
 ## Required Historical Checks
 
 Before running BC, confirm:
